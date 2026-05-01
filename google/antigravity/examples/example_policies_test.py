@@ -78,6 +78,22 @@ class StandardPoliciesTest(unittest.IsolatedAsyncioTestCase):
     self.assertTrue(result.allow)
     mock_handler.assert_not_called()
 
+  async def test_block_rm_policy(self):
+    hook = policy.enforce([example_policies.BLOCK_RM_POLICY])
+    ctx = hooks.HookContext()
+
+    # Allowed
+    result = await hook.run(
+        ctx, _make_tool_call("run_command", command_line="ls -l")
+    )
+    self.assertTrue(result.allow)
+
+    # Denied
+    result = await hook.run(
+        ctx, _make_tool_call("run_command", command_line="rm -rf")
+    )
+    self.assertFalse(result.allow)
+
 
 if __name__ == "__main__":
   unittest.main()

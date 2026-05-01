@@ -98,11 +98,10 @@ class ToolRunner:
     """Executes a callable, running sync functions in a separate thread."""
 
     def is_async(callable_obj):
-      if inspect.iscoroutinefunction(callable_obj):
-        return True
-      if hasattr(callable_obj, "__call__"):
-        return inspect.iscoroutinefunction(callable_obj.__call__)
-      return False
+      return inspect.iscoroutinefunction(callable_obj) or (
+          hasattr(callable_obj, "__call__")
+          and inspect.iscoroutinefunction(callable_obj.__call__)
+      )
 
     if not is_async(fn):
       result = await asyncio.to_thread(fn, **kwargs)

@@ -215,8 +215,33 @@ class ToolRunnerTest(absltest.TestCase):
     result = asyncio.run(runner.execute("_async_tool", x=3, y=4))
     self.assertEqual(result, 7)
 
+  def test_tools_property(self):
+    """Verifies tools property returns a copy of the dictionary."""
+    runner = tool_runner.ToolRunner([_sample_tool])
+    tools_dict = runner.tools
+    self.assertEqual(tools_dict, {"_sample_tool": _sample_tool})
+    # Verify it's a copy
+    tools_dict["other"] = _async_tool
+    self.assertNotIn("other", runner.tools)
+
+  def test_execute_sync_callable_object(self):
+    """Verifies execution of a class instance with a sync __call__ method."""
+
+    class SyncCallable:
+
+      def __call__(self, arg1: str) -> str:
+        return f"Callable {arg1}"
+
+    tool = SyncCallable()
+    runner = tool_runner.ToolRunner()
+    runner.register(tool, name="sync_callable")
+
+    result = asyncio.run(runner.execute("sync_callable", arg1="World"))
+    self.assertEqual(result, "Callable World")
+
 
 class ProcessToolCallsTest(absltest.TestCase):
+
   """Validates batch tool call processing via process_tool_calls.
 
   Ensures that normalized tool call dicts are dispatched correctly and

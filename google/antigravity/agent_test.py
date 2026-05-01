@@ -22,6 +22,7 @@ from google.antigravity import agent
 from google.antigravity import types
 from google.antigravity.conversation import conversation
 from google.antigravity.hooks import hooks
+from google.antigravity.hooks import policy
 
 
 class AgentTest(unittest.IsolatedAsyncioTestCase):
@@ -205,6 +206,146 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
       "local_connection.LocalConnectionStrategy"
   )
   @mock.patch.object(conversation.Conversation, "create")
+  async def test_agent_register_hook_before_start(
+      self, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    class MyPreTurnHook(hooks.PreTurnHook):
+
+      async def run(self, context, data):
+        return types.HookResult(allow=True)
+
+    my_hook = MyPreTurnHook()
+
+    ag = agent.Agent(system_instructions="test")
+    ag.register_hook(my_hook)
+    self.assertIn(my_hook, ag._pending_hooks)
+
+    async with ag:
+      self.assertIn(my_hook, ag._hook_runner.pre_turn_hooks)
+      self.assertEqual(len(ag._pending_hooks), 0)
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  async def test_agent_register_trigger_after_start(
+      self, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    async def my_trigger(_):
+      pass
+
+    async with agent.Agent(
+        system_instructions="test", triggers=[my_trigger]
+    ) as ag:
+      with self.assertRaises(RuntimeError):
+        ag.register_trigger(my_trigger)
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  async def test_agent_with_policies(
+      self, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    my_policy = mock.MagicMock(spec=policy.Policy)
+    my_policy.decision = policy.Decision.APPROVE
+    my_policy.tool = "some_tool"
+
+    async with agent.Agent(
+        system_instructions="test", policies=[my_policy]
+    ) as ag:
+      self.assertEqual(len(ag._hook_runner.pre_tool_call_decide_hooks), 1)
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  async def test_agent_write_mode_with_policies(
+      self, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    my_policy = mock.MagicMock(spec=policy.Policy)
+    my_policy.decision = policy.Decision.APPROVE
+    my_policy.tool = "some_tool"
+
+    async with agent.Agent(
+        system_instructions="test", read_only=False, policies=[my_policy]
+    ):
+      _, kwargs = mock_strategy_class.call_args
+      capabilities_config = kwargs.get("capabilities_config")
+      self.assertIsNotNone(capabilities_config)
+      self.assertNotEqual(
+          capabilities_config.enabled_tools, types.BuiltinTools.read_only()
+      )
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  async def test_agent_mcp_server_unknown_type(
+      self, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    mcp_servers = [{"type": "unknown_type"}]
+
+    with self.assertRaises(ValueError):
+      async with agent.Agent(
+          system_instructions="test", mcp_servers=mcp_servers
+      ):
+        pass
+
+  async def test_agent_chat_before_start(self):
+    ag = agent.Agent(system_instructions="test")
+    with self.assertRaises(RuntimeError):
+      await ag.chat("hello")
+
+  async def test_agent_connection_before_start(self):
+    ag = agent.Agent(system_instructions="test")
+    with self.assertRaises(RuntimeError):
+      _ = ag.connection
+
+  async def test_agent_run_interactive_loop_before_start(self):
+    ag = agent.Agent(system_instructions="test")
+    with self.assertRaises(RuntimeError):
+      await ag.run_interactive_loop()
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
   async def test_agent_api_key_env(self, mock_conv_create, mock_strategy_class):
     del mock_conv_create  # Unused.
 
@@ -314,6 +455,109 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
       )
 
     mock_bridge_instance.stop.assert_called_once()
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  @mock.patch("asyncio.to_thread")
+  async def test_agent_run_interactive_loop(
+      self, mock_to_thread, mock_conv_create, mock_strategy_class
+  ):
+    mock_strategy_instance = mock.MagicMock()
+
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    mock_conversation = mock.MagicMock(spec=conversation.Conversation)
+    mock_conversation.send = mock.AsyncMock()
+
+    async def mock_receive_steps():
+      yield types.Step(is_final_response=True, content="Agent response")
+
+    mock_conversation.receive_steps = mock_receive_steps
+
+    mock_cm = mock.AsyncMock()
+    mock_cm.__aenter__.return_value = mock_conversation
+    mock_conv_create.return_value = mock_cm
+
+    # Mock input to return '', 'hello' then 'exit'
+    mock_to_thread.side_effect = ["", "hello", "exit"]
+
+    async with agent.Agent(system_instructions="test") as ag:
+      with mock.patch("builtins.print") as mock_print:
+        await ag.run_interactive_loop()
+
+    mock_conversation.send.assert_called_once_with("hello")
+    mock_print.assert_any_call("Agent: Agent response")
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  @mock.patch("asyncio.to_thread")
+  async def test_agent_run_interactive_loop_interrupt(
+      self, mock_to_thread, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    mock_to_thread.side_effect = KeyboardInterrupt()
+
+    async with agent.Agent(system_instructions="test") as ag:
+      with mock.patch("builtins.print") as mock_print:
+        await ag.run_interactive_loop()
+
+    mock_print.assert_any_call("\nGoodbye!")
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  @mock.patch("asyncio.to_thread")
+  async def test_agent_run_interactive_loop_exception(
+      self, mock_to_thread, mock_conv_create, mock_strategy_class
+  ):
+    del mock_conv_create  # Unused.
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    mock_to_thread.side_effect = [ValueError("Fail"), "exit"]
+
+    async with agent.Agent(system_instructions="test") as ag:
+      with mock.patch("builtins.print") as mock_print:
+        await ag.run_interactive_loop()
+
+    mock_print.assert_any_call("Error: Fail")
+
+  @mock.patch(
+      "google.antigravity.agent."
+      "local_connection.LocalConnectionStrategy"
+  )
+  @mock.patch.object(conversation.Conversation, "create")
+  async def test_agent_connection_after_start(
+      self, mock_conv_create, mock_strategy_class
+  ):
+    mock_strategy_instance = mock.MagicMock()
+
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    mock_conversation = mock.MagicMock(spec=conversation.Conversation)
+    mock_conversation._connection = mock.MagicMock()
+    mock_cm = mock.AsyncMock()
+    mock_cm.__aenter__.return_value = mock_conversation
+    mock_conv_create.return_value = mock_cm
+
+    async with agent.Agent(system_instructions="test") as ag:
+      conn = ag.connection
+      self.assertEqual(conn, mock_conversation._connection)
 
 
 if __name__ == "__main__":

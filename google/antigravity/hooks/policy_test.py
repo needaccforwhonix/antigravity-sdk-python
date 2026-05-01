@@ -309,7 +309,26 @@ class PredicateTest(unittest.IsolatedAsyncioTestCase):
     self.assertFalse(result.allow)
     self.assertIn("broken", result.message)
 
+  async def test_parameterless_predicate(self):
+    """Predicate with no arguments should be called without arguments."""
+
+    def no_args_predicate():
+      return True
+
+    hook = policy.enforce([
+        policy.deny("run_command", when=no_args_predicate, name="no-args"),
+    ])
+    ctx = hooks.HookContext()
+
+    # This will call no_args_predicate(args) in policy.py:224,
+    # which will raise TypeError because it takes 0 args but 1 was given.
+    # It will be caught and fail-closed.
+    result = await hook.run(ctx, _make_tool_call("run_command"))
+    self.assertFalse(result.allow)
+    self.assertIn("no-args", result.message)
+
   async def test_typed_predicate(self):
+
     """Predicate expecting a Pydantic model receives the parsed object."""
 
     def my_typed_predicate(args: example_policies.RunCommandArgs) -> bool:
