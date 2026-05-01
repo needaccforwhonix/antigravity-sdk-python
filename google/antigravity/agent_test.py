@@ -212,7 +212,7 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     mock_strategy_instance.stop = mock.AsyncMock()
     mock_strategy_class.return_value = mock_strategy_instance
 
-    with mock.patch.dict("os.environ", {}):
+    with mock.patch.dict("os.environ", {}, clear=True):
       async with agent.Agent(system_instructions="test", api_key="test_key"):
         self.assertIsNone(os.environ.get("GEMINI_API_KEY"))
         # Also check config
@@ -225,7 +225,7 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     mock_strategy_instance.stop = mock.AsyncMock()
     mock_strategy_class.return_value = mock_strategy_instance
 
-    with mock.patch.dict("os.environ", {}):
+    with mock.patch.dict("os.environ", {}, clear=True):
       async with agent.Agent(system_instructions="test", api_key="test_key"):
         self.assertIsNone(os.environ.get("GEMINI_API_KEY"))
         # Also check config
