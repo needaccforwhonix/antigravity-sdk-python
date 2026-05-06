@@ -70,6 +70,46 @@ This hierarchy ensures that state set in a broader scope is visible to narrower
 scopes, but not from narrower to broader scopes, preventing cross-talk and
 ensuring proper cleanup.
 
+## Connection Compatibility
+
+Hook behavior depends on the connection type.
+
+### `LocalConnection`
+
+-   **Built-in tool hooks** (view_file, run_command, edit_file, etc.):
+    `PreToolCallDecideHook` runs and can **approve or deny** built-in tools.
+    `PostToolCallHook` fires when the harness reports the tool as complete.
+    `OnToolErrorHook` fires when the tool fails.
+
+-   **Built-in tool results**: When `PostToolCallHook` fires for a built-in
+    tool, the `ToolResult.result` field contains the tool's output as a
+    string. The following table shows what each tool surfaces:
+
+    | Tool | Result Content |
+    |---|---|
+    | `run_command` | Combined stdout and stderr |
+    | `list_dir` | Formatted listing with names, types, and sizes |
+    | `find_by_name` | Newline-separated list of matching filenames |
+    | `grep_search` | Number of results found |
+    | `view_file` | File content (falls back to step text) |
+    | `edit_file` | Diff summary (falls back to step text) |
+    | `generate_image` | Generated image name |
+    | Other tools | The step's `text` field |
+
+    Large outputs may be truncated before delivery.
+
+-   **Host-side (custom Python and MCP) tools**: The full hook pipeline runs
+    (Decide → Execute → PostToolCall / OnToolError).
+
+-   **Subagent hooks**: Subagent invocations appear as `START_SUBAGENT` tool
+    calls. `PreToolCallDecideHook` fires before the subagent starts, and
+    `PostToolCallHook` fires when the subagent trajectory goes idle, with the
+    subagent's final response as the result. Additionally, hooks fire for
+    **every tool call within a subagent trajectory**. When a subagent calls
+    `run_command` or `view_file`, the parent's `PreToolCallDecideHook` and
+    `PostToolCallHook` fire for those calls. This means a policy that denies
+    `run_command` will deny it whether the parent or any subagent calls it.
+
 ## Observing Model Responses
 
 To observe model-generated text:

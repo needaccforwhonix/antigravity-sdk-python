@@ -126,7 +126,7 @@ class HookRunner:
   ) -> tuple[
       hooks_base.HookResult, types.ToolCall, hooks_base.OperationContext
   ]:
-    """Dispatches pre-tool call events (Decide only).
+    """Dispatches pre-tool call events.
 
     Args:
       turn_context: The current turn context.
@@ -160,7 +160,7 @@ class HookRunner:
         res = await hook.run(context=op_context, data=error)
         if res is not None:
           return hooks_base.HookResult(allow=True), res
-      except Exception as e:
+      except Exception as e:  # pylint: disable=broad-exception-caught
         logging.exception("Critical failure in OnToolErrorHook")
         return (
             hooks_base.HookResult(

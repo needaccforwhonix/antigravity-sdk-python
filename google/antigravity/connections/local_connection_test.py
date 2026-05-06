@@ -2107,6 +2107,213 @@ class LocalConnectionSubagentHookTest(unittest.IsolatedAsyncioTestCase):
     self.assertFalse(conn._parent_idle)
     self.assertFalse(conn._is_idle.is_set())
 
+  async def test_decide_hook_fires_for_subagent_tool_call(self):
+    """Verifies PreToolCallDecideHook fires for a tool call within a subagent.
+
+    Why: Hooks should apply uniformly to all tool calls regardless of which
+    trajectory originates them. A policy that denies run_command should deny
+    it whether the parent or a subagent calls it.
+    How: Simulate a tool_confirmation_request with a subagent trajectory_id
+    and verify the Decide hook is invoked with the correct tool name.
+    """
+    captured = []
+
+    class CaptureDecide(hooks_base.PreToolCallDecideHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+        return hooks_base.HookResult(allow=True)
+
+    hr = hook_runner.HookRunner(pre_tool_call_decide_hooks=[CaptureDecide()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # Establish cascade_id via a parent trajectory step.
+    main_step = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="main",
+            step_index=0,
+            text="Main step",
+            state=localharness_pb2.StepUpdate.STATE_ACTIVE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+        )
+    )
+    await self.mock_ws.put_event(main_step)
+    await asyncio.sleep(0.1)
+
+    # Simulate a subagent's tool_confirmation_request for run_command.
+    sub_tool_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="sub_traj",
+            step_index=0,
+            text="Requesting permission to make tool call",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            run_command=localharness_pb2.ActionRunCommand(
+                command_line="ls -la",
+                working_dir="/tmp",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(sub_tool_event)
+    await asyncio.sleep(0.1)
+
+    # Decide hook must have fired for the subagent's tool call.
+    self.assertEqual(len(captured), 1)
+    self.assertEqual(captured[0].name, "run_command")
+    self.assertIn("command_line", captured[0].args)
+
+    # Confirmation should reference the subagent's trajectory.
+    sent = json.loads(self.mock_ws.sent_messages[0])
+    self.assertEqual(sent["toolConfirmation"]["trajectoryId"], "sub_traj")
+    self.assertTrue(sent["toolConfirmation"]["accepted"])
+
+  async def test_decide_hook_can_deny_subagent_tool_call(self):
+    """Verifies a Decide hook can deny a tool call from a subagent.
+
+    Why: Policy enforcement must extend to subagent tool calls. A blanket
+    deny-all policy should prevent subagents from executing tools.
+    How: Register a deny-all Decide hook, simulate a subagent's
+    tool_confirmation_request, and verify accepted=False.
+    """
+
+    class DenyAll(hooks_base.PreToolCallDecideHook):
+
+      async def run(self, context, data):
+        return hooks_base.HookResult(allow=False, message="Denied")
+
+    hr = hook_runner.HookRunner(pre_tool_call_decide_hooks=[DenyAll()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # Establish cascade_id.
+    main_step = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="main",
+            step_index=0,
+            text="Main step",
+            state=localharness_pb2.StepUpdate.STATE_ACTIVE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+        )
+    )
+    await self.mock_ws.put_event(main_step)
+    await asyncio.sleep(0.1)
+
+    # Subagent's tool call.
+    sub_tool_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="sub_traj",
+            step_index=0,
+            text="Requesting permission",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            run_command=localharness_pb2.ActionRunCommand(
+                command_line="rm -rf /",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(sub_tool_event)
+    await asyncio.sleep(0.1)
+
+    sent = json.loads(self.mock_ws.sent_messages[0])
+    self.assertFalse(sent["toolConfirmation"]["accepted"])
+
+  async def test_post_tool_hook_fires_for_subagent_tool_done(self):
+    """Verifies PostToolCallHook fires when a subagent's tool completes.
+
+    Why: Observability hooks must fire for subagent tool completions, not
+    just the START_SUBAGENT lifecycle. Users need to see every tool
+    execution regardless of which trajectory ran it.
+    How: Approve a subagent's tool call, send STATE_DONE for the same
+    subagent step, and verify PostToolCallHook fires.
+    """
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # Establish cascade_id.
+    main_step = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="main",
+            step_index=0,
+            text="Main step",
+            state=localharness_pb2.StepUpdate.STATE_ACTIVE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+        )
+    )
+    await self.mock_ws.put_event(main_step)
+    await asyncio.sleep(0.1)
+
+    # Subagent's tool confirmation (auto-approved, no Decide hooks).
+    sub_tool_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="sub_traj",
+            step_index=0,
+            text="Requesting permission",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            view_file=localharness_pb2.ActionViewFile(
+                file_path="file:///tmp/test.py",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(sub_tool_event)
+    await asyncio.sleep(0.1)
+
+    # Subagent's tool completes.
+    sub_done_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="main",
+            trajectory_id="sub_traj",
+            step_index=0,
+            text="Viewing file /tmp/test.py",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+        )
+    )
+    await self.mock_ws.put_event(sub_done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertIsInstance(captured[0], types.ToolResult)
+    self.assertEqual(captured[0].name, "view_file")
+    self.assertEqual(captured[0].result, "Viewing file /tmp/test.py")
+
 
 class LocalConnectionToolCallHooksTest(unittest.IsolatedAsyncioTestCase):
   """Tests for post-tool-call and on-tool-error hooks."""
@@ -2247,37 +2454,180 @@ class LocalConnectionToolCallHooksTest(unittest.IsolatedAsyncioTestCase):
     self.assertIn("bad input", str(captured_errors[0]))
 
 
-class LocalConnectionBuiltinDecideHookTest(
-    unittest.IsolatedAsyncioTestCase
-):
-  """Verifies Decide hooks run for built-in tool confirmations."""
+class LocalConnectionBuiltinToolHooksTest(unittest.IsolatedAsyncioTestCase):
+  """Verifies hooks for builtin tool calls (view_file, run_command, etc.).
+
+  Builtin tools are executed inside the Go harness. The SDK interacts with
+  them via the ToolConfirmation protocol, which only supports accept/reject.
+  These tests verify:
+  - Decide hooks run and can deny builtin tool calls.
+  - PostToolCallHook fires when a builtin tool step transitions to STATE_DONE.
+  - OnToolErrorHook fires when a builtin tool step transitions to STATE_ERROR.
+  - No spurious hooks fire for untracked steps.
+  """
 
   def setUp(self):
     super().setUp()
     self.mock_process = mock.MagicMock()
     self.mock_ws = FakeWebSocket()
 
-  async def test_decide_hooks_run_for_builtin_tools(self):
-    """Verifies PreToolCallDecideHook runs and can deny builtin tools."""
+  def _make_builtin_confirmation_event(
+      self, trajectory_id="traj", step_index=0
+  ):
+    """Creates a view_file step with a tool confirmation request."""
+    return localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id=trajectory_id,
+            trajectory_id=trajectory_id,
+            step_index=step_index,
+            text="Requesting permission to call tool \"view_file\"",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            view_file=localharness_pb2.ActionViewFile(
+                file_path="file:///tmp/test.py",
+                start_line=1,
+                end_line=50,
+            ),
+        )
+    )
 
-    class DenyAll(hooks_base.PreToolCallDecideHook):
+  def _make_done_event(
+      self, trajectory_id="traj", step_index=0, text="file contents here"
+  ):
+    """Creates a STATE_DONE step for a completed builtin tool."""
+    return localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id=trajectory_id,
+            trajectory_id=trajectory_id,
+            step_index=step_index,
+            text=text,
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+        )
+    )
+
+  def _make_error_event(
+      self,
+      trajectory_id="traj",
+      step_index=0,
+      error_message="File not found",
+  ):
+    """Creates a STATE_ERROR step for a failed builtin tool."""
+    return localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id=trajectory_id,
+            trajectory_id=trajectory_id,
+            step_index=step_index,
+            text="",
+            state=localharness_pb2.StepUpdate.STATE_ERROR,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            error_message=error_message,
+        )
+    )
+
+  async def test_decide_hooks_run_for_builtin_tools(self):
+    """Verifies PreToolCallDecideHooks run and can deny builtin tools.
+
+    Why: Decide hooks provide the only SDK-side control over builtin tool
+    execution. They must function correctly to enable policy enforcement.
+    How: Register a Decide hook that denies, simulate a confirmation, and
+    assert accepted=False is sent back.
+    """
+
+    class DenyAllDecide(hooks_base.PreToolCallDecideHook):
 
       async def run(self, context, data):
-        return hooks_base.HookResult(allow=False, message="Denied")
+        return hooks_base.HookResult(allow=False, message="Denied by policy")
 
-    hr = hook_runner.HookRunner(pre_tool_call_decide_hooks=[DenyAll()])
+    hr = hook_runner.HookRunner(
+        pre_tool_call_decide_hooks=[DenyAllDecide()]
+    )
     _ = local_connection.LocalConnection(
         process=self.mock_process,
         ws=self.mock_ws,
         hook_runner=hr,
     )
 
-    event = localharness_pb2.OutputEvent(
+    event = self._make_builtin_confirmation_event()
+    await self.mock_ws.put_event(event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(self.mock_ws.sent_messages), 1)
+    sent = json.loads(self.mock_ws.sent_messages[0])
+    self.assertFalse(sent["toolConfirmation"]["accepted"])
+
+  async def test_post_tool_call_hook_on_builtin_done(self):
+    """Verifies PostToolCallHook fires when a builtin tool step completes.
+
+    Why: Users need observability into builtin tool results. The harness
+    executes them internally; the SDK dispatches PostToolCallHook by
+    observing the step's transition to STATE_DONE.
+    How: Simulate approval + STATE_DONE transition, capture the ToolResult
+    passed to PostToolCallHook, and verify its name and result text.
+    """
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # 1. Confirmation request -> auto-approved (no Decide hooks).
+    event = self._make_builtin_confirmation_event()
+    await self.mock_ws.put_event(event)
+    await asyncio.sleep(0.1)
+
+    # 2. Tool completes.
+    done_event = self._make_done_event(text="line 1\nline 2\nline 3")
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertIsInstance(captured[0], types.ToolResult)
+    self.assertEqual(captured[0].name, "view_file")
+    self.assertEqual(captured[0].result, "line 1\nline 2\nline 3")
+
+  async def test_post_tool_call_hook_uses_structured_result(self):
+    """Verifies PostToolCallHook extracts result from action fields.
+
+    Why: The harness populates structured result data on per-action messages
+    (e.g., ActionRunCommand.combined_output) rather than a generic field.
+    The SDK should extract these and use them as the ToolResult.result.
+    """
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # 1. Confirmation request with run_command -> auto-approved.
+    confirm_event = localharness_pb2.OutputEvent(
         step_update=localharness_pb2.StepUpdate(
             cascade_id="traj",
             trajectory_id="traj",
             step_index=0,
-            text='Requesting permission to call tool "run_command"',
+            text="Requesting permission to make tool call",
             state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
             source=localharness_pb2.StepUpdate.SOURCE_MODEL,
             target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
@@ -2285,15 +2635,462 @@ class LocalConnectionBuiltinDecideHookTest(
                 localharness_pb2.ToolConfirmationRequest()
             ),
             run_command=localharness_pb2.ActionRunCommand(
-                command_line="rm -rf /",
+                command_line="cat read.txt",
+                working_dir="/tmp",
             ),
         )
     )
+    await self.mock_ws.put_event(confirm_event)
+    await asyncio.sleep(0.1)
+
+    # 2. Tool completes with structured result on the action message.
+    done_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="View read.txt",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            run_command=localharness_pb2.ActionRunCommand(
+                command_line="cat read.txt",
+                working_dir="/tmp",
+                combined_output="secret file contents",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertIsInstance(captured[0], types.ToolResult)
+    self.assertEqual(captured[0].name, "run_command")
+    # Structured combined_output should be wrapped in RunCommandResult.
+    self.assertIsInstance(
+        captured[0].result, local_connection.RunCommandResult
+    )
+    self.assertEqual(captured[0].result.output, "secret file contents")
+
+  async def test_post_tool_call_hook_falls_back_to_text(self):
+    """Verifies PostToolCallHook falls back to text when no action result exists.
+
+    Why: Not all action types have structured result fields. When the
+    harness does not populate structured result data, the hook should
+    still receive the text field as the result.
+    """
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # 1. Confirmation request -> auto-approved.
+    event = self._make_builtin_confirmation_event()
+    await self.mock_ws.put_event(event)
+    await asyncio.sleep(0.1)
+
+    # 2. Tool completes with text only, no structured action result.
+    done_event = self._make_done_event(text="View read.txt")
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertIsInstance(captured[0], types.ToolResult)
+    self.assertEqual(captured[0].name, "view_file")
+    # Falls back to text when no structured result is available.
+    self.assertEqual(captured[0].result, "View read.txt")
+
+  async def test_tool_result_for_run_command(self):
+    """Verifies result extraction for run_command built-in tool."""
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # Confirmation with run_command action.
+    confirm_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Requesting permission to make tool call",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            run_command=localharness_pb2.ActionRunCommand(
+                command_line="echo hello",
+                working_dir="/tmp",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(confirm_event)
+    await asyncio.sleep(0.1)
+
+    done_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Echo command",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            run_command=localharness_pb2.ActionRunCommand(
+                command_line="echo hello",
+                working_dir="/tmp",
+                combined_output="hello\n",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertEqual(captured[0].name, "run_command")
+    self.assertIsInstance(
+        captured[0].result, local_connection.RunCommandResult
+    )
+    self.assertEqual(captured[0].result.output, "hello\n")
+
+  async def test_tool_result_for_list_directory(self):
+    """Verifies result extraction for list_dir built-in tool."""
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    confirm_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Requesting permission to make tool call",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            list_directory=localharness_pb2.ActionListDirectory(
+                directory_path="file:///tmp/testdir",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(confirm_event)
+    await asyncio.sleep(0.1)
+
+    done_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Directory listing",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            list_directory=localharness_pb2.ActionListDirectory(
+                directory_path="file:///tmp/testdir",
+                results=[
+                    localharness_pb2.ActionListDirectory.Result(
+                        name="alpha.txt", file_size=10
+                    ),
+                    localharness_pb2.ActionListDirectory.Result(
+                        name="beta.txt", file_size=20
+                    ),
+                ],
+            ),
+        )
+    )
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertEqual(captured[0].name, "list_directory")
+    self.assertIsInstance(
+        captured[0].result, local_connection.ListDirectoryResult
+    )
+    names = [e.name for e in captured[0].result.entries]
+    self.assertIn("alpha.txt", names)
+    self.assertIn("beta.txt", names)
+
+  async def test_tool_result_for_grep_search(self):
+    """Verifies result extraction for search_directory built-in tool."""
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    confirm_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Requesting permission to make tool call",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            search_directory=localharness_pb2.ActionSearchDirectory(
+                directory_path="file:///tmp/file.txt",
+                query="hello",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(confirm_event)
+    await asyncio.sleep(0.1)
+
+    done_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Search results",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            search_directory=localharness_pb2.ActionSearchDirectory(
+                directory_path="file:///tmp/file.txt",
+                query="hello",
+                num_results=3,
+            ),
+        )
+    )
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertEqual(captured[0].name, "search_directory")
+    self.assertIsInstance(
+        captured[0].result, local_connection.SearchDirectoryResult
+    )
+    self.assertEqual(captured[0].result.num_results, 3)
+
+  async def test_tool_result_for_find_file(self):
+    """Verifies result extraction for find_file built-in tool."""
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    confirm_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="Requesting permission to make tool call",
+            state=localharness_pb2.StepUpdate.STATE_WAITING_FOR_USER,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            tool_confirmation_request=(
+                localharness_pb2.ToolConfirmationRequest()
+            ),
+            find_file=localharness_pb2.ActionFindFile(
+                directory_path="file:///tmp/searchdir",
+                query="target.txt",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(confirm_event)
+    await asyncio.sleep(0.1)
+
+    done_event = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=0,
+            text="File search",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_ENVIRONMENT,
+            find_file=localharness_pb2.ActionFindFile(
+                directory_path="file:///tmp/searchdir",
+                query="target.txt",
+                output="target.txt",
+            ),
+        )
+    )
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 1)
+    self.assertEqual(captured[0].name, "find_file")
+    self.assertIsInstance(
+        captured[0].result, local_connection.FindFileResult
+    )
+    self.assertEqual(captured[0].result.output, "target.txt")
+
+  async def test_on_tool_error_hook_on_builtin_error(self):
+    """Verifies OnToolErrorHook fires when a builtin tool step errors.
+
+    Why: Users need observability into builtin tool failures for logging
+    and recovery. The harness reports errors via STATE_ERROR steps.
+    How: Simulate approval + STATE_ERROR transition, capture the error
+    passed to OnToolErrorHook, and verify the error message.
+    """
+    captured_errors = []
+
+    class CaptureToolError(hooks_base.OnToolErrorHook):
+
+      async def run(self, context, data):
+        captured_errors.append(data)
+        return None
+
+    hr = hook_runner.HookRunner(on_tool_error_hooks=[CaptureToolError()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    event = self._make_builtin_confirmation_event()
     await self.mock_ws.put_event(event)
     await asyncio.sleep(0.1)
 
     sent = json.loads(self.mock_ws.sent_messages[0])
+    self.assertTrue(sent["toolConfirmation"]["accepted"])
+
+    error_event = self._make_error_event(error_message="Permission denied")
+    await self.mock_ws.put_event(error_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured_errors), 1)
+    self.assertIsInstance(captured_errors[0], RuntimeError)
+    self.assertIn("Permission denied", str(captured_errors[0]))
+
+  async def test_no_spurious_post_tool_hook_for_non_builtin_steps(self):
+    """Verifies post-tool hooks don't fire for normal model response steps.
+
+    Why: Only steps that were tracked via ToolConfirmation should trigger
+    PostToolCallHook. A model response step that happens to be STATE_DONE
+    must not be confused with a completed builtin tool.
+    How: Send a model response step (no prior confirmation), and verify
+    PostToolCallHook was not called.
+    """
+    captured = []
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(post_tool_call_hooks=[CapturePostTool()])
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    # A normal model step (not a builtin tool) that is DONE.
+    model_done = localharness_pb2.OutputEvent(
+        step_update=localharness_pb2.StepUpdate(
+            cascade_id="traj",
+            trajectory_id="traj",
+            step_index=5,
+            text="Final model response",
+            state=localharness_pb2.StepUpdate.STATE_DONE,
+            source=localharness_pb2.StepUpdate.SOURCE_MODEL,
+            target=localharness_pb2.StepUpdate.TARGET_USER,
+        )
+    )
+    await self.mock_ws.put_event(model_done)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 0)
+
+  async def test_denied_builtin_not_tracked(self):
+    """Verifies denied builtin tools are not tracked for post-tool dispatch.
+
+    Why: If a Decide hook denies a builtin tool, there is no execution to
+    observe. Tracking it would cause stale entries or spurious dispatches.
+    How: Deny via Decide hook, send a STATE_DONE for the same step, and
+    verify PostToolCallHook was not called.
+    """
+    captured = []
+
+    class DenyDecide(hooks_base.PreToolCallDecideHook):
+
+      async def run(self, context, data):
+        return hooks_base.HookResult(allow=False)
+
+    class CapturePostTool(hooks_base.PostToolCallHook):
+
+      async def run(self, context, data):
+        captured.append(data)
+
+    hr = hook_runner.HookRunner(
+        pre_tool_call_decide_hooks=[DenyDecide()],
+        post_tool_call_hooks=[CapturePostTool()],
+    )
+    _ = local_connection.LocalConnection(
+        process=self.mock_process,
+        ws=self.mock_ws,
+        hook_runner=hr,
+    )
+
+    event = self._make_builtin_confirmation_event()
+    await self.mock_ws.put_event(event)
+    await asyncio.sleep(0.1)
+
+    # The tool was denied.
+    sent = json.loads(self.mock_ws.sent_messages[0])
     self.assertFalse(sent["toolConfirmation"]["accepted"])
+
+    # Send a DONE for the same step — PostToolCallHook must NOT fire.
+    done_event = self._make_done_event()
+    await self.mock_ws.put_event(done_event)
+    await asyncio.sleep(0.1)
+
+    self.assertEqual(len(captured), 0)
 
 
 class LocalConnectionHookAcceptanceTest(unittest.IsolatedAsyncioTestCase):
