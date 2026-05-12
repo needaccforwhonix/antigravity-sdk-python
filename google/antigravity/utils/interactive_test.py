@@ -373,38 +373,6 @@ class RunInteractiveLoopTest(unittest.IsolatedAsyncioTestCase):
 
     mock_print.assert_any_call("\nGoodbye!")
 
-  @mock.patch(
-      "google.antigravity.connections."
-      "local.local_connection.LocalConnectionStrategy"
-  )
-  @mock.patch.object(conversation.Conversation, "create")
-  @mock.patch(
-      "google.antigravity.utils.interactive.async_input",
-      new_callable=mock.AsyncMock,
-  )
-  async def test_run_interactive_loop_exception(
-      self, mock_async_input, mock_conv_create, mock_strategy_class
-  ):
-    """Verifies error handling in the interactive loop.
-
-    What: Simulates an exception during input, followed by 'exit'.
-    Why: Ensures errors are logged and printed, and the loop continues.
-    How: Asserts the error message is printed and the loop exits cleanly.
-    """
-    del mock_conv_create  # Unused.
-    mock_strategy_instance = mock.MagicMock()
-    mock_strategy_instance.stop = mock.AsyncMock()
-    mock_strategy_class.return_value = mock_strategy_instance
-
-    mock_async_input.side_effect = [ValueError("Fail"), "exit"]
-
-    config = local_connection.LocalAgentConfig(system_instructions="test")
-    async with agent.Agent(config) as ag:
-      with mock.patch("builtins.print") as mock_print:
-        await interactive.run_interactive_loop(ag)
-
-    mock_print.assert_any_call("Error: Fail")
-
 
 if __name__ == "__main__":
   unittest.main()

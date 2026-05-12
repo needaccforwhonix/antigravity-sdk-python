@@ -46,41 +46,37 @@ async def fetch_unstructured_meeting_notes(meeting_id: str) -> str:
   return "Error: Meeting notes not found."
 
 
-async def run():
+async def main() -> None:
   """Runs the structured output example."""
   logging.basicConfig(level=logging.INFO)
 
-  try:
-    config = LocalAgentConfig(
-        system_instructions="You are a helpful assistant.",
-        tools=[fetch_unstructured_meeting_notes],
-        response_schema=MeetingSummary,
+  config = LocalAgentConfig(
+      system_instructions="You are a helpful assistant.",
+      tools=[fetch_unstructured_meeting_notes],
+      response_schema=MeetingSummary,
+  )
+  async with agent.Agent(config) as meeting_agent:
+
+    prompt = (
+        "Retrieve the notes for 'meeting-2026-05' and return structured"
+        " action items for the meeting attendees in the correct format"
+        " needed."
     )
-    async with agent.Agent(config) as meeting_agent:
 
-      prompt = (
-          "Retrieve the notes for 'meeting-2026-05' and return structured"
-          " action items for the meeting attendees in the correct format"
-          " needed."
-      )
+    print("\nSending prompt to agent...")
+    response = await meeting_agent.chat(prompt)
 
-      print("\nSending prompt to agent...")
-      response = await meeting_agent.chat(prompt)
-
-      data = await response.structured_output()
-      if data:
-        print("\n=== Structured Meeting Action Items ===")
-        for item in data.get("action_items", []):
-          print(f"- Assignee: {item.get('assignee')}")
-          print(f"  Task:     {item.get('task')}")
-          print(f"  Deadline: {item.get('deadline')}\n")
-      else:
-        print("\nFailed to extract structured summary natively.")
-        print(f"Final Text Response: {await response.text()}")
-
-  except Exception:  # pylint: disable=broad-exception-caught
-    logging.exception("Execution failed")
+    data = await response.structured_output()
+    if data:
+      print("\n=== Structured Meeting Action Items ===")
+      for item in data.get("action_items", []):
+        print(f"- Assignee: {item.get('assignee')}")
+        print(f"  Task:     {item.get('task')}")
+        print(f"  Deadline: {item.get('deadline')}\n")
+    else:
+      print("\nFailed to extract structured summary natively.")
+      print(f"Final Text Response: {await response.text()}")
 
 
 if __name__ == "__main__":
-  asyncio.run(run())
+  asyncio.run(main())

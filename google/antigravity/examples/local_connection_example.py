@@ -120,76 +120,66 @@ def _print_telemetry(
 
 async def run():
   """Runs the example."""
-  try:
+  mcp_server_path = os.path.join(os.path.dirname(__file__), "mcp_server.par")
 
-    mcp_server_path = os.path.join(
-        os.path.dirname(__file__), "mcp_server.par"
-    )
+  config = LocalAgentConfig(
+      tools=[read_file_upside_down],
+      mcp_servers=[
+          types.McpStdioServer(
+              command=mcp_server_path,
+              args=["--transport=stdio"],
+          )
+      ],
+      policies=[policy.ask_user("*", handler=interactive.ask_user_handler)],
+      hooks=[interactive.AskQuestionHook()],
+      capabilities=types.CapabilitiesConfig(
+          disabled_tools=(
+              [types.BuiltinTools.RUN_COMMAND]
+              if _DISABLE_RUN_COMMAND.value
+              else None
+          ),
+      ),
+  )
+  config.gemini_config = types.GeminiConfig(
+      models=types.ModelConfig(
+          default=types.ModelEntry(name=_MODEL_NAME.value),
+      ),
+  )
+  config.system_instructions = _SYSTEM_INSTRUCTION.value
 
-    config = LocalAgentConfig(
-        tools=[read_file_upside_down],
-        mcp_servers=[
-            types.McpStdioServer(
-                command=mcp_server_path,
-                args=["--transport=stdio"],
-            )
-        ],
-        policies=[policy.ask_user("*", handler=interactive.ask_user_handler)],
-        hooks=[interactive.AskQuestionHook()],
-        capabilities=types.CapabilitiesConfig(
-            disabled_tools=(
-                [types.BuiltinTools.RUN_COMMAND]
-                if _DISABLE_RUN_COMMAND.value
-                else None
-            ),
-        ),
-    )
-    config.gemini_config = types.GeminiConfig(
-        models=types.ModelConfig(
-            default=types.ModelEntry(name=_MODEL_NAME.value),
-        ),
-    )
-    config.system_instructions = _SYSTEM_INSTRUCTION.value
+  async with Agent(config) as agent:
+    print("\nGoogle Antigravity SDK Demo")
+    print("Type your message and press Enter • Ctrl+C to exit\n")
 
-    logging.info("Starting agent...")
-    async with Agent(config) as agent:
-
-      print("\nGoogle Antigravity SDK Demo")
-      print("Type your message and press Enter • Ctrl+C to exit\n")
-
-      while True:
-        try:
-          user_input = await async_input("\n→ ")
-          user_input = user_input.strip()
-          if not user_input:
-            continue
-          if user_input.lower() in ("exit", "quit"):
-            print("\nGoodbye! 👋")
-            break
-
-          response = await agent.chat(user_input)
-
-          # Stream the response to stdout
-          async for chunk in response:
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
-          print()
-
-          if _SHOW_USAGE.value:
-            assert agent._conversation is not None
-            _print_telemetry(
-                response.usage_metadata,
-                agent.total_usage,
-                agent._conversation.history,
-            )
-
-        except (KeyboardInterrupt, asyncio.CancelledError, EOFError):
+    while True:
+      try:
+        user_input = await async_input("\n→ ")
+        user_input = user_input.strip()
+        if not user_input:
+          continue
+        if user_input.lower() in ("exit", "quit"):
           print("\nGoodbye! 👋")
           break
 
-  except Exception as e:  # pylint: disable=broad-exception-caught
-    print(f"An error occurred: {e}", file=sys.stderr)
-    logging.exception("Error running example: %s", e)
+        response = await agent.chat(user_input)
+
+        # Stream the response to stdout
+        async for chunk in response:
+          sys.stdout.write(chunk)
+          sys.stdout.flush()
+        print()
+
+        if _SHOW_USAGE.value:
+          assert agent._conversation is not None
+          _print_telemetry(
+              response.usage_metadata,
+              agent.total_usage,
+              agent._conversation.history,
+          )
+
+      except (KeyboardInterrupt, asyncio.CancelledError, EOFError):
+        print("\nGoodbye! 👋")
+        break
 
 
 def main(argv: Sequence[str]) -> None:

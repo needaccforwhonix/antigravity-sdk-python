@@ -79,7 +79,7 @@ def wait_for_server(url: str, server_process: subprocess.Popen[str]):
     )
 
 
-async def main():
+async def main() -> None:
   logging.basicConfig(level=logging.INFO)
 
   port = 8001
@@ -118,9 +118,6 @@ async def main():
       )
 
       print(f"Agent: {await response.text()}\n")
-
-  except Exception as e:  # pylint: disable=broad-except
-    print(f"\nFailed to connect or run agent: {e}")
   finally:
     print("Stopping local HTTP MCP server...")
     server_process.terminate()

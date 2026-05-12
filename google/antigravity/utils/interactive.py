@@ -33,7 +33,6 @@ Includes:
 from __future__ import annotations
 
 import asyncio
-import logging
 import threading
 from typing import TYPE_CHECKING
 
@@ -233,6 +232,3 @@ async def run_interactive_loop(agent: agent_module.Agent) -> None:
     except (KeyboardInterrupt, EOFError):
       print("\nGoodbye!")
       break
-    except Exception as e:  # pylint: disable=broad-exception-caught
-      logging.exception("Error in interactive loop: %s", e)
-      print(f"Error: {e}")
