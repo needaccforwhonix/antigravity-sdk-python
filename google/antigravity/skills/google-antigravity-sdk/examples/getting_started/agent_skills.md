@@ -18,12 +18,9 @@ You can configure an agent to load skills from the filesystem by specifying the
 In a typical scenario, a user might ask the agent to use a specific skill and
 provide a path to it. The agent can then be configured to load that skill.
 
-> [!IMPORTANT] The `skills_paths` parameter expects a list of paths to
-> directories that *contain* skill folders. Each skill folder must contain a
-> `SKILL.md` file. For example, if the user provides a path to a skill folder
-> `/path/to/my-skill` (which contains `SKILL.md`), you should pass the parent
-> directory `/path/to` to `skills_paths`. The agent will then discover the skill
-> `my-skill`.
+> [!IMPORTANT] The `skills_paths` parameter accepts a list of paths. Each path in the list can be:
+> - A directory that *contains* skill folders (each containing a `SKILL.md` file). The agent will discover all skills in that directory.
+> - A direct path to a specific skill folder (containing a `SKILL.md` file) to load just that skill.
 
 ```python
 from google.antigravity import Agent, LocalAgentConfig
