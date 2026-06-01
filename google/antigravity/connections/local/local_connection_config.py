@@ -150,6 +150,24 @@ class LocalAgentConfig(connection.AgentConfig):
       self.policies = policy.workspace_only(allowed_paths) + self.policies
     return self
 
+  def _get_system_instructions(self) -> types.SystemInstructions | None:
+    """Returns the system instructions, normalizing shorthand if needed."""
+    if isinstance(self.system_instructions, str):
+      return types.TemplatedSystemInstructions(
+          sections=[
+              types.SystemInstructionSection(content=self.system_instructions)
+          ]
+      )
+    return self.system_instructions
+
+  def _get_or_create_save_dir(self) -> str:
+    """Returns save_dir, generating a temporary one if not specified."""
+    save_dir = self.save_dir
+    if save_dir is None:
+      save_dir = tempfile.mkdtemp(prefix="antigravity_")
+      logging.info("No save_dir specified; using %s", save_dir)
+    return save_dir
+
   def create_strategy(
       self,
       *,
@@ -160,28 +178,14 @@ class LocalAgentConfig(connection.AgentConfig):
     # this config module, so we import the strategy class here at call time.
     from google.antigravity.connections.local import local_connection  # pylint: disable=g-import-not-at-top
 
-    if isinstance(self.system_instructions, str):
-      si = types.TemplatedSystemInstructions(
-          sections=[
-              types.SystemInstructionSection(content=self.system_instructions)
-          ]
-      )
-    else:
-      si = self.system_instructions
-
-    save_dir = self.save_dir
-    if save_dir is None:
-      save_dir = tempfile.mkdtemp(prefix="antigravity_")
-      logging.info("No save_dir specified; using %s", save_dir)
-
     return local_connection.LocalConnectionStrategy(
         tool_runner=tool_runner,
         hook_runner=hook_runner,
         gemini_config=self.gemini_config,
-        system_instructions=si,
+        system_instructions=self._get_system_instructions(),
         capabilities_config=self.capabilities,
         conversation_id=self.conversation_id,
-        save_dir=save_dir,
+        save_dir=self._get_or_create_save_dir(),
         workspaces=self.workspaces,
         app_data_dir=self.app_data_dir,
         skills_paths=self.skills_paths,

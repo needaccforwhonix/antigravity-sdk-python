@@ -1574,8 +1574,8 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
       )
     return self._connection
 
-  async def __aenter__(self) -> None:
-    """Starts the backend."""
+  def _validate_connection(self) -> None:
+    """Validates that all required configurations (like API keys) are present."""
     # Fail fast if no API key is available. The localharness binary requires
     # a Gemini API key to call the Gemini API; without one it silently returns
     # empty responses.
@@ -1597,6 +1597,10 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
             "For Vertex AI, either a GCP project and location, or an API key"
             " (Express Mode) must be set."
         )
+
+  async def __aenter__(self) -> None:
+    """Starts the backend."""
+    self._validate_connection()
 
     harness_config = self._build_harness_config()
     sdk_version = _get_sdk_version()
