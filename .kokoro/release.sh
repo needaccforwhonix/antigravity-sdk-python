@@ -61,6 +61,7 @@ fi
 if [[ -n "${GOB_COMMIT:-}" ]]; then
   echo "--- Pinning SDK source to GoB commit: ${GOB_COMMIT} ---"
   git checkout "${GOB_COMMIT}"
+  git checkout HEAD -- .kokoro/
 fi
 
 PROJECT_DIR="$(pwd)"
