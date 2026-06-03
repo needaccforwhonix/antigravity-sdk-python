@@ -24,7 +24,6 @@ from google.antigravity.conversation import conversation
 from google.antigravity.hooks import hook_runner
 from google.antigravity.hooks import hooks
 from google.antigravity.hooks import policy
-from google.antigravity.mcp import bridge
 from google.antigravity.tools import tool_context
 from google.antigravity.tools import tool_runner
 from google.antigravity.triggers import trigger_runner
@@ -54,7 +53,6 @@ class Agent:
     self._tool_runner = None
     self._hook_runner = None
     self._trigger_runner = None
-    self._mcp_bridge = None
     # Use the original config (not self._config) for hooks and triggers:
     # model_copy(deep=True) creates new objects, breaking reference equality
     # for user-provided hooks/triggers. The list() snapshot prevents the
@@ -142,16 +140,6 @@ class Agent:
         )
 
       all_tools = list(self._config.tools)
-      # Connect MCP servers
-      if self._config.mcp_servers:
-        logging.info("Connecting to MCP servers...")
-        self._mcp_bridge = bridge.McpBridge()
-        self._exit_stack.push_async_callback(self._mcp_bridge.stop)
-
-        for server_cfg in self._config.mcp_servers:
-          await self._mcp_bridge.connect(server_cfg)
-        all_tools.extend(self._mcp_bridge.tools)
-
       self._tool_runner = tool_runner.ToolRunner(tools=all_tools)
 
       self._strategy = self._config.create_strategy(
