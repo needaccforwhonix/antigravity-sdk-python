@@ -1466,7 +1466,12 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     return local_connection.LocalConnectionStrategy(**kwargs)
 
   def test_default_config_produces_valid_harness_config(self):
-    """Verifies that a strategy with defaults produces a well-formed proto."""
+    """Verifies that a strategy with all defaults produces a well-formed proto.
+
+    Why: The default path is the most common case. Callers should be able to
+    construct a strategy with only binary_path and get a valid HarnessConfig.
+    How: Build the config and assert the proto has expected default structure.
+    """
     strategy = self._make_strategy()
     config = strategy._build_harness_config()
     self.assertIsInstance(config, localharness_pb2.HarnessConfig)
@@ -1476,17 +1481,14 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     self.assertTrue(config.harness_side_tools.run_command.enabled)
     self.assertTrue(config.harness_side_tools.find.enabled)
     self.assertTrue(config.harness_side_tools.generate_image.enabled)
-    # Model config should be empty because we did not specify one.
-    self.assertFalse(config.HasField("gemini_config"))
-    self.assertFalse(config.HasField("gemma_config"))
-    self.assertFalse(config.HasField("custom_backend"))
-    # No system instructions, workspaces, or skills by default.
+    # No models, system instructions, workspaces, or skills by default.
+    self.assertEmpty(config.models)
     self.assertFalse(config.HasField("system_instructions"))
     self.assertEqual(len(config.workspaces), 0)
     self.assertEqual(len(config.skills_paths), 0)
 
   def test_legacy_gemini_config_produces_valid_proto(self):
-    """Verifies that the legacy gemini_config translates to gemini_config proto."""
+    """Verifies that the legacy gemini_config translates to the models proto."""
     legacy_config = types.GeminiConfig(
         api_key="legacy-key",
         models=types.ModelConfig(
@@ -1496,30 +1498,33 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     # We construct LocalAgentConfig with gemini_config
     cfg = local_connection_config.LocalAgentConfig(gemini_config=legacy_config)
     strategy = self._make_strategy(
-        gemini_config=cfg.gemini_config,
+        models=cfg.models,
     )
     config = strategy._build_harness_config()
-    self.assertTrue(config.HasField("gemini_config"))
-    self.assertEqual(config.gemini_config.api_key, "legacy-key")
-    self.assertEqual(config.gemini_config.model_name, "gemini-2.5-pro")
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, "gemini-2.5-pro")
+    self.assertEqual(config.models[0].types, [localharness_pb2.MODEL_TYPE_TEXT])
+    self.assertEqual(config.models[0].gemini_api_endpoint.api_key, "legacy-key")
 
   def test_legacy_shorthands_api_key_produces_valid_proto(self):
-    """Verifies that the legacy api_key shorthand translates to gemini_config proto."""
+    """Verifies that the legacy api_key shorthand translates to the models proto."""
     cfg = local_connection_config.LocalAgentConfig(
         model="gemini-2.5-flash",
         api_key="shorthand-key",
     )
     strategy = self._make_strategy(
-        gemini_config=cfg.gemini_config,
+        models=cfg.models,
     )
     config = strategy._build_harness_config()
-    self.assertTrue(config.HasField("gemini_config"))
-    self.assertEqual(config.gemini_config.api_key, "shorthand-key")
-    self.assertEqual(config.gemini_config.model_name, "gemini-2.5-flash")
-    self.assertFalse(config.gemini_config.use_vertex)
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, "gemini-2.5-flash")
+    self.assertEqual(
+        config.models[0].gemini_api_endpoint.api_key, "shorthand-key"
+    )
+    self.assertEqual(config.models[0].types, [localharness_pb2.MODEL_TYPE_TEXT])
 
   def test_legacy_shorthands_vertex_produces_valid_proto(self):
-    """Verifies that the legacy vertex shorthands translate to gemini_config proto."""
+    """Verifies that the legacy vertex shorthands translate to the models proto."""
     cfg = local_connection_config.LocalAgentConfig(
         model="gemini-2.5-flash",
         vertex=True,
@@ -1527,58 +1532,14 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
         location="us-east4",
     )
     strategy = self._make_strategy(
-        gemini_config=cfg.gemini_config,
+        models=cfg.models,
     )
     config = strategy._build_harness_config()
-    self.assertTrue(config.HasField("gemini_config"))
-    self.assertEqual(config.gemini_config.model_name, "gemini-2.5-flash")
-    self.assertTrue(config.gemini_config.use_vertex)
-    self.assertEqual(config.gemini_config.project, "vertex-project")
-    self.assertEqual(config.gemini_config.location, "us-east4")
-
-  def test_models_list_gemini_api_endpoint_propagates(self):
-    """Verifies that the new models list with GeminiAPIEndpoint translates to gemini_config proto."""
-    cfg = local_connection_config.LocalAgentConfig(
-        models=[
-            types.ModelTarget(
-                name="gemini-2.5-flash",
-                types=[types.ModelType.TEXT],
-                endpoint=types.GeminiAPIEndpoint(api_key="models-api-key"),
-            )
-        ]
-    )
-    strategy = self._make_strategy(
-        gemini_config=cfg.gemini_config,
-    )
-    config = strategy._build_harness_config()
-    self.assertTrue(config.HasField("gemini_config"))
-    self.assertEqual(config.gemini_config.api_key, "models-api-key")
-    self.assertEqual(config.gemini_config.model_name, "gemini-2.5-flash")
-    self.assertFalse(config.gemini_config.use_vertex)
-
-  def test_models_list_vertex_endpoint_propagates(self):
-    """Verifies that the new models list with VertexEndpoint translates to gemini_config proto."""
-    cfg = local_connection_config.LocalAgentConfig(
-        models=[
-            types.ModelTarget(
-                name="gemini-2.5-flash",
-                types=[types.ModelType.TEXT],
-                endpoint=types.VertexEndpoint(
-                    project="models-proj",
-                    location="models-loc",
-                ),
-            )
-        ]
-    )
-    strategy = self._make_strategy(
-        gemini_config=cfg.gemini_config,
-    )
-    config = strategy._build_harness_config()
-    self.assertTrue(config.HasField("gemini_config"))
-    self.assertTrue(config.gemini_config.use_vertex)
-    self.assertEqual(config.gemini_config.project, "models-proj")
-    self.assertEqual(config.gemini_config.location, "models-loc")
-    self.assertEqual(config.gemini_config.model_name, "gemini-2.5-flash")
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, "gemini-2.5-flash")
+    self.assertTrue(config.models[0].HasField("vertex_endpoint"))
+    self.assertEqual(config.models[0].vertex_endpoint.project, "vertex-project")
+    self.assertEqual(config.models[0].vertex_endpoint.location, "us-east4")
 
   def test_capabilities_config_finish_tool_schema_json_to_proto(self):
     """Verifies capabilities config propagates finish tool schema to the proto config.
@@ -1594,6 +1555,31 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     config = strategy._build_harness_config()
     self.assertEqual(config.finish_tool_schema_json, '{"type": "object"}')
 
+  def test_legacy_gemini_config_deprecation_and_conversion(self):
+    """Verifies that legacy gemini_config translates to the models field."""
+    legacy_config = types.GeminiConfig(
+        api_key="test-key",
+        models=types.ModelConfig(
+            default=types.ModelEntry(
+                name="gemini-2.5-pro",
+                generation=types.GenerationConfig(
+                    thinking_level=types.ThinkingLevel.HIGH
+                ),
+            )
+        ),
+    )
+    with self.assertWarns(DeprecationWarning):
+      cfg = local_connection_config.LocalAgentConfig(
+          gemini_config=legacy_config
+      )
+    strategy = self._make_strategy(models=cfg.models)
+    config = strategy._build_harness_config()
+    self.assertEqual(config.models[0].name, "gemini-2.5-pro")
+    self.assertEqual(config.models[0].gemini_api_endpoint.api_key, "test-key")
+    self.assertEqual(
+        config.models[0].gemini_api_endpoint.options.thinking_level, "high"
+    )
+
   def test_gemini_config_to_proto(self):
     """Verifies GeminiConfig fields translate to the correct proto fields.
 
@@ -1602,16 +1588,17 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     How: Set all GeminiConfig fields and assert proto field values.
     """
     strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(
-            api_key="test-key",
-            models=types.ModelConfig(
-                default=types.ModelEntry(name="gemini-2.5-pro"),
-            ),
-        )
+        models=[
+            types.ModelTarget(
+                name="gemini-2.5-pro",
+                types=[types.ModelType.TEXT],
+                endpoint=types.GeminiAPIEndpoint(api_key="test-key"),
+            )
+        ]
     )
     config = strategy._build_harness_config()
-    self.assertEqual(config.gemini_config.api_key, "test-key")
-    self.assertEqual(config.gemini_config.model_name, "gemini-2.5-pro")
+    self.assertEqual(config.models[0].gemini_api_endpoint.api_key, "test-key")
+    self.assertEqual(config.models[0].name, "gemini-2.5-pro")
 
   def test_gemini_config_none_fields_omitted(self):
     """Verifies that None fields on GeminiConfig are not set on the proto.
@@ -1621,15 +1608,27 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     How: Create a GeminiConfig with defaults (api_key=None), build proto,
     and assert api_key is not populated.
     """
-    strategy = self._make_strategy(gemini_config=types.GeminiConfig())
+    strategy = self._make_strategy(
+        models=[
+            types.ModelTarget(
+                name="gemini-3.5-flash",
+                types=[types.ModelType.TEXT],
+                endpoint=types.GeminiAPIEndpoint(api_key=None),
+            )
+        ]
+    )
     config = strategy._build_harness_config()
-    self.assertFalse(config.gemini_config.HasField("api_key"))
+    self.assertEqual(config.models[0].name, "gemini-3.5-flash")
+    # api_key should not be set (proto default empty string).
+    self.assertEqual(config.models[0].gemini_api_endpoint.api_key, "")
 
-  def test_gemini_config_default_model_name(self):
+  def test_models_default_model_name(self):
     """Verifies the default model name propagates correctly."""
-    strategy = self._make_strategy(gemini_config=types.GeminiConfig())
+    strategy = self._make_strategy(
+        models=[types.ModelTarget(types=[types.ModelType.TEXT])]
+    )
     config = strategy._build_harness_config()
-    self.assertEqual(config.gemini_config.model_name, "gemini-3.5-flash")
+    self.assertEqual(config.models[0].name, "")
 
   def test_system_instructions_string_shorthand(self):
     """Verifies that a plain string normalizes to AppendedSystemInstructions.
@@ -1924,94 +1923,162 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     config = strategy._build_harness_config()
     self.assertEqual(len(config.workspaces), 0)
 
-  def test_gemini_config_thinking_level_set(self):
-    """Verifies that thinking_level on ModelEntry maps to the proto field."""
+  def test_models_thinking_level_set(self):
+    """Verifies that thinking_level on ModelTarget maps to the proto field."""
     strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(
-            models=types.ModelConfig(
-                default=types.ModelEntry(
-                    name=types.DEFAULT_MODEL,
-                    generation=types.GenerationConfig(
+        models=[
+            types.ModelTarget(
+                name=types.DEFAULT_MODEL,
+                types=[types.ModelType.TEXT],
+                endpoint=types.GeminiAPIEndpoint(
+                    options=types.GeminiModelOptions(
                         thinking_level=types.ThinkingLevel.HIGH,
                     ),
                 ),
-            ),
-        )
+            )
+        ]
     )
     config = strategy._build_harness_config()
-    self.assertEqual(config.gemini_config.thinking_level, "high")
+    self.assertEqual(
+        config.models[0].gemini_api_endpoint.options.thinking_level, "high"
+    )
 
-  def test_gemini_config_thinking_level_none_omitted(self):
+  def test_models_thinking_level_none_omitted(self):
     """Verifies that thinking_level=None leaves the proto field at its default."""
-    strategy = self._make_strategy(gemini_config=types.GeminiConfig())
+    strategy = self._make_strategy(
+        models=[
+            types.ModelTarget(
+                name=types.DEFAULT_MODEL,
+                types=[types.ModelType.TEXT],
+                endpoint=types.GeminiAPIEndpoint(
+                    options=types.GeminiModelOptions(thinking_level=None),
+                ),
+            )
+        ]
+    )
     config = strategy._build_harness_config()
-    self.assertEqual(config.gemini_config.thinking_level, "")
+    self.assertFalse(
+        config.models[0].gemini_api_endpoint.HasField("options")
+    )
 
-  def test_gemini_config_thinking_level_all_values(self):
+  def test_models_thinking_level_all_values(self):
     """Verifies all ThinkingLevel enum values produce correct proto strings."""
     for level in types.ThinkingLevel:
       strategy = self._make_strategy(
-          gemini_config=types.GeminiConfig(
-              models=types.ModelConfig(
-                  default=types.ModelEntry(
-                      name=types.DEFAULT_MODEL,
-                      generation=types.GenerationConfig(
-                          thinking_level=level,
-                      ),
+          models=[
+              types.ModelTarget(
+                  name=types.DEFAULT_MODEL,
+                  types=[types.ModelType.TEXT],
+                  endpoint=types.GeminiAPIEndpoint(
+                      options=types.GeminiModelOptions(thinking_level=level),
                   ),
-              ),
-          )
+              )
+          ]
       )
       config = strategy._build_harness_config()
       self.assertEqual(
-          config.gemini_config.thinking_level,
+          config.models[0].gemini_api_endpoint.options.thinking_level,
           level.value,
           f"ThinkingLevel.{level.name} should produce proto string"
           f" '{level.value}'",
       )
 
-  def test_per_model_api_key_takes_priority(self):
-    """Verifies that a per-model API key overrides the shared GeminiConfig key."""
-    strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(
-            api_key="shared-key",
-            models=types.ModelConfig(
-                default=types.ModelEntry(
-                    name=types.DEFAULT_MODEL,
-                    api_key="per-model-key",
-                ),
-            ),
-        )
-    )
-    config = strategy._build_harness_config()
-    self.assertEqual(config.gemini_config.api_key, "per-model-key")
-
-  def test_shared_api_key_used_when_per_model_is_none(self):
-    """Verifies that the shared GeminiConfig api_key is used as fallback."""
-    strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(
-            api_key="shared-key",
-            models=types.ModelConfig(
-                default=types.ModelEntry(name=types.DEFAULT_MODEL),
-            ),
-        )
-    )
-    config = strategy._build_harness_config()
-    self.assertEqual(config.gemini_config.api_key, "shared-key")
-
   def test_vertex_config_propagates(self):
     """Verifies that Vertex configuration fields propagate to proto."""
-    strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(
-            vertex=True,
-            project="my-project",
-            location="us-central1",
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.VertexEndpoint(
+                project="my-project",
+                location="us-central1",
+            ),
         )
-    )
+    ]
+    strategy = self._make_strategy(models=models)
     config = strategy._build_harness_config()
-    self.assertTrue(config.gemini_config.use_vertex)
-    self.assertEqual(config.gemini_config.project, "my-project")
-    self.assertEqual(config.gemini_config.location, "us-central1")
+    self.assertTrue(config.models[0].HasField("vertex_endpoint"))
+    self.assertEqual(config.models[0].vertex_endpoint.project, "my-project")
+    self.assertEqual(config.models[0].vertex_endpoint.location, "us-central1")
+
+  def test_models_list_propagates(self):
+    """Verifies that the new models list propagates to HarnessConfig."""
+    models = [
+        types.ModelTarget(
+            name="gemini-2.5-pro",
+            types=[types.ModelType.TEXT],
+            endpoint=types.GeminiAPIEndpoint(
+                options=types.GeminiModelOptions(
+                    thinking_level=types.ThinkingLevel.HIGH
+                )
+            ),
+        ),
+        types.ModelTarget(
+            name="imagen-3-custom",
+            types=[types.ModelType.IMAGE],
+        ),
+    ]
+    strategy = self._make_strategy(models=models)
+    config = strategy._build_harness_config()
+
+    # Text model assertions
+    self.assertEqual(config.models[0].name, "gemini-2.5-pro")
+    self.assertEqual(
+        config.models[0].gemini_api_endpoint.options.thinking_level, "high"
+    )
+
+    # Image model assertions
+    self.assertEqual(
+        config.harness_side_tools.generate_image.model_name, "imagen-3-custom"
+    )
+
+  def test_models_list_custom_endpoints_propagate(self):
+    """Verifies that custom endpoints in the models list propagate to proto."""
+    # Test VertexEndpoint
+    vertex_endpoint = types.VertexEndpoint(
+        project="vertex-proj", location="europe-west1"
+    )
+    models_vertex = [
+        types.ModelTarget(
+            name="gemini-ultra",
+            types=[types.ModelType.TEXT],
+            endpoint=vertex_endpoint,
+        )
+    ]
+    strategy = self._make_strategy(models=models_vertex)
+    config = strategy._build_harness_config()
+    self.assertTrue(config.models[0].HasField("vertex_endpoint"))
+    self.assertEqual(config.models[0].vertex_endpoint.project, "vertex-proj")
+    self.assertEqual(config.models[0].vertex_endpoint.location, "europe-west1")
+
+    # Test GeminiAPIEndpoint
+    api_endpoint = types.GeminiAPIEndpoint(api_key="api-key-xyz")
+    models_api = [
+        types.ModelTarget(
+            name="gemini-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=api_endpoint,
+        )
+    ]
+    strategy = self._make_strategy(models=models_api)
+    config = strategy._build_harness_config()
+    self.assertTrue(config.models[0].HasField("gemini_api_endpoint"))
+    self.assertEqual(
+        config.models[0].gemini_api_endpoint.api_key, "api-key-xyz"
+    )
+
+  def test_models_stored_directly_on_strategy(self):
+    """Verifies that the models list is stored as self._models."""
+    models = [
+        types.ModelTarget(
+            name="gemini-2.5-pro",
+            types=[types.ModelType.TEXT],
+        ),
+    ]
+    strategy = self._make_strategy(models=models)
+    self.assertIsNotNone(strategy._models)
+    self.assertLen(strategy._models, 1)
+    self.assertEqual(strategy._models[0].name, "gemini-2.5-pro")
 
   def test_session_config_save_dir_stored(self):
     """Verifies that session_config.save_dir is preserved on the strategy.
@@ -2118,33 +2185,51 @@ class LocalConnectionStrategyApiKeyTest(unittest.IsolatedAsyncioTestCase):
 
     Why: The Go localharness binary silently returns empty responses when no
     API key is provided. An explicit error at startup is much more actionable.
-    How: Create a strategy with no api_key and no GEMINI_API_KEY env var and
-    assert AntigravityValidationError is raised.
+    How: Create a strategy with a model target and assert
+    AntigravityValidationError.
     """
-    strategy = self._make_strategy()
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+        )
+    ]
+    strategy = self._make_strategy(models=models)
     with self.assertRaises(types.AntigravityValidationError) as ctx:
       async with strategy:
         pass
-    self.assertIn("API key", str(ctx.exception))
+    self.assertIn("must have an endpoint configured", str(ctx.exception))
 
   @mock.patch.dict("os.environ", {}, clear=True)
-  async def test_raises_with_empty_gemini_config(self):
-    """Verifies entry raises when GeminiConfig has no api_key and env is unset.
+  async def test_raises_with_empty_endpoint_api_key(self):
+    """Verifies entry raises when GeminiAPIEndpoint has no api_key and env is unset.
 
-    Why: GeminiConfig() defaults api_key to None. The check must not be
-    fooled by the presence of a GeminiConfig object with no key.
+    Why: GeminiAPIEndpoint(api_key=None) must not be fooled by empty values.
     """
-    strategy = self._make_strategy(gemini_config=types.GeminiConfig())
-    with self.assertRaises(types.AntigravityValidationError):
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.GeminiAPIEndpoint(api_key=None),
+        )
+    ]
+    strategy = self._make_strategy(models=models)
+    with self.assertRaises(types.AntigravityValidationError) as ctx:
       async with strategy:
         pass
+    self.assertIn("A Gemini API key is required", str(ctx.exception))
 
   @mock.patch.dict("os.environ", {}, clear=True)
   async def test_raises_without_auth_in_vertex_mode(self):
     """Verifies strategy raises validation error when Vertex is set but no project/location or api_key provided."""
-    strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(vertex=True)
-    )
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.VertexEndpoint(project=None, location=None),
+        )
+    ]
+    strategy = self._make_strategy(models=models)
     with self.assertRaises(types.AntigravityValidationError) as ctx:
       async with strategy:
         pass
@@ -2161,13 +2246,17 @@ class LocalConnectionStrategyApiKeyTest(unittest.IsolatedAsyncioTestCase):
     mock_proc.stdout.read.return_value = b""
     mock_popen.return_value = mock_proc
 
-    strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(
-            vertex=True,
-            project="my-project",
-            location="us-central1",
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.VertexEndpoint(
+                project="my-project",
+                location="us-central1",
+            ),
         )
-    )
+    ]
+    strategy = self._make_strategy(models=models)
     with self.assertRaises(RuntimeError):
       async with strategy:
         pass
@@ -2200,12 +2289,11 @@ class LocalConnectionStrategyApiKeyTest(unittest.IsolatedAsyncioTestCase):
 
   @mock.patch.dict("os.environ", {}, clear=True)
   @mock.patch("subprocess.Popen")
-  async def test_accepts_gemini_config_api_key(self, mock_popen):
-    """Verifies entry does not raise when GeminiConfig.api_key is set.
+  async def test_accepts_models_api_key(self, mock_popen):
+    """Verifies entry does not raise when model endpoint api_key is set.
 
     Why: Explicit API key in config is the recommended path.
-    How: Set api_key in GeminiConfig, enter the context manager, and verify
-    it proceeds past the validation check.
+    How: Set api_key in GeminiAPIEndpoint, enter context manager.
 
     Args:
       mock_popen: Mocked subprocess.Popen to prevent actual process launch.
@@ -2216,9 +2304,14 @@ class LocalConnectionStrategyApiKeyTest(unittest.IsolatedAsyncioTestCase):
     mock_proc.stderr = mock.MagicMock()
     mock_proc.stdout.read.return_value = b""
     mock_popen.return_value = mock_proc
-    strategy = self._make_strategy(
-        gemini_config=types.GeminiConfig(api_key="explicit-key")
-    )
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.GeminiAPIEndpoint(api_key="explicit-key"),
+        )
+    ]
+    strategy = self._make_strategy(models=models)
     with self.assertRaises(RuntimeError):
       async with strategy:
         pass
@@ -3700,9 +3793,12 @@ class LocalAgentConfigTest(absltest.TestCase):
     )
 
     self.assertIsInstance(strategy, local_connection.LocalConnectionStrategy)
-    self.assertEqual(
-        strategy._gemini_config.models.default.name, "gemini-2.5-pro"
-    )
+    self.assertIsNotNone(strategy._models)
+    text_models = [
+        m for m in strategy._models if types.ModelType.TEXT in m.types
+    ]
+    self.assertLen(text_models, 1)
+    self.assertEqual(text_models[0].name, "gemini-2.5-pro")
 
   def test_constructor_parameters_fully_typed(self):
     """Verifies all subclass fields are accepted by the constructor under pytype."""

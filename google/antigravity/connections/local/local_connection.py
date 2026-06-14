@@ -387,6 +387,78 @@ class LocalConnectionStep(types.Step):
     )
 
 
+def to_proto_model_type(
+    model_type: types.ModelType,
+) -> localharness_pb2.ModelType:
+  if model_type == types.ModelType.TEXT:
+    return localharness_pb2.MODEL_TYPE_TEXT
+  if model_type == types.ModelType.IMAGE:
+    return localharness_pb2.MODEL_TYPE_IMAGE
+  return localharness_pb2.MODEL_TYPE_UNSPECIFIED
+
+
+def build_gemini_options_proto(
+    options: types.GeminiModelOptions | None,
+) -> localharness_pb2.GeminiModelOptions:
+  proto = localharness_pb2.GeminiModelOptions()
+  if options:
+    proto.thinking_level = (
+        options.thinking_level.value if options.thinking_level else ""
+    )
+  return proto
+
+
+def build_models_proto(
+    models: list[types.ModelTarget],
+    default_api_key: str | None = None,
+) -> list[localharness_pb2.ModelConfig]:
+  """Builds a list of ModelConfig protos from a ModelConfig list."""
+  protos = []
+  for m in models:
+    proto = localharness_pb2.ModelConfig(
+        name=m.name or "",
+        types=[to_proto_model_type(t) for t in m.types],
+    )
+    if isinstance(m.endpoint, types.GeminiAPIEndpoint):
+      api_key = m.endpoint.api_key or default_api_key
+      api_endpoint_proto = localharness_pb2.GeminiAPIEndpoint(
+          base_url=m.endpoint.base_url or "",
+          http_headers=m.endpoint.http_headers or {},
+          api_key=api_key or "",
+      )
+      if m.endpoint.options and m.endpoint.options.model_dump(
+          exclude_none=True
+      ):
+        api_endpoint_proto.options.CopyFrom(
+            build_gemini_options_proto(m.endpoint.options)
+        )
+      proto.gemini_api_endpoint.CopyFrom(api_endpoint_proto)
+    elif isinstance(m.endpoint, types.VertexEndpoint):
+      vertex_endpoint_proto = localharness_pb2.VertexEndpoint(
+          base_url=m.endpoint.base_url or "",
+          http_headers=m.endpoint.http_headers or {},
+          project=m.endpoint.project or "",
+          location=m.endpoint.location or "",
+      )
+      if m.endpoint.options and m.endpoint.options.model_dump(
+          exclude_none=True
+      ):
+        vertex_endpoint_proto.options.CopyFrom(
+            build_gemini_options_proto(m.endpoint.options)
+        )
+      proto.vertex_endpoint.CopyFrom(vertex_endpoint_proto)
+    else:
+      # Endpoint is None. Apply default API key if provided.
+      if default_api_key:
+        proto.gemini_api_endpoint.CopyFrom(
+            localharness_pb2.GeminiAPIEndpoint(
+                api_key=default_api_key,
+            )
+        )
+    protos.append(proto)
+  return protos
+
+
 def callable_to_tool_proto(
     fn: Callable[..., Any],
     tool_runner: t_runner.ToolRunner | None = None,
@@ -1473,7 +1545,7 @@ def _to_mcp_server_proto(
 class LocalConnectionStrategy(connection.ConnectionStrategy):
   """Strategy for establishing a LocalConnection."""
 
-  _gemini_config: types.GeminiConfig | None
+  _models: list[types.ModelTarget] | None
   _system_instructions: types.SystemInstructions | None
   _connection: LocalConnection | None
 
@@ -1482,7 +1554,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
       *,
       tool_runner: t_runner.ToolRunner | None = None,
       hook_runner: h_runner.HookRunner | None = None,
-      gemini_config: str | types.GeminiConfig | None = None,
+      models: list[types.ModelTarget] | None = None,
       skills_paths: list[str] | None = None,
       system_instructions: str | types.SystemInstructions | None = None,
       capabilities_config: types.CapabilitiesConfig | None = None,
@@ -1497,7 +1569,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     Args:
       tool_runner: Optional ToolRunner for custom tools.
       hook_runner: Optional HookRunner for custom hooks.
-      gemini_config: Optional GeminiConfig or model name shorthand.
+      models: Optional list of model targets.
       skills_paths: Optional list of paths to search for skills.
       system_instructions: Optional SystemInstructions or string shorthand.
       capabilities_config: Optional CapabilitiesConfig to configure tools.
@@ -1512,15 +1584,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     self._hook_runner = hook_runner
     self._connection: LocalConnection | None = None
     self._mcp_servers = mcp_servers or []
-
-    # Normalize str shorthand to GeminiConfig model.
-    self._gemini_config: types.GeminiConfig | None = None
-    if isinstance(gemini_config, str):
-      self._gemini_config = types.GeminiConfig(
-          models=types.ModelConfig(default=types.ModelEntry(name=gemini_config))
-      )
-    else:
-      self._gemini_config = gemini_config
+    self._models = models
     self._skills_paths = skills_paths
 
     # Normalize str shorthand to SystemInstructions model.
@@ -1538,6 +1602,40 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     self._save_dir = save_dir
     self._workspaces = [normalize_wire_path(ws) for ws in workspaces or []]
     self._app_data_dir = app_data_dir
+
+  # TODO(b/2142387): These will go away / be promoted in the following CL when
+  # Go support is done.
+  def _find_model_by_type(
+      self, models: list[types.ModelTarget], model_type: types.ModelType
+  ) -> types.ModelTarget | None:
+    """Finds a model of the given type from the list, with robust fallback and logging."""
+    matching = [m for m in models if model_type in m.types]
+    if not matching:
+      logging.debug("No model of type %s found in models list", model_type)
+      return None
+
+    if len(matching) > 1:
+      logging.info(
+          "Multiple models of type %s found: %s. Using the first one: %s",
+          model_type,
+          [m.name for m in matching],
+          matching[0].name,
+      )
+    return matching[0]
+
+  # TODO(b/2142387): These will go away / be promoted in the following CL when
+  # Go support is done.
+  def _get_image_model_name(
+      self, cfg: types.CapabilitiesConfig
+  ) -> str:
+    """Returns the image model name from models list."""
+    if self._models:
+      image_model = self._find_model_by_type(
+          self._models, types.ModelType.IMAGE
+      )
+      if image_model and image_model.name:
+        return image_model.name
+    return DEFAULT_IMAGE_GENERATION_MODEL
 
   def _build_harness_config(self) -> localharness_pb2.HarnessConfig:
     """Translates Pydantic config objects into a HarnessConfig proto."""
@@ -1571,30 +1669,9 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
           appended.appended_sections.add(title=sec.title, content=sec.content)
         system_instructions_proto.appended.CopyFrom(appended)
 
-    gemini_config_proto = None
-    if self._gemini_config:
-      gemini_config_proto = localharness_pb2.GeminiConfig(
-          model_name=self._gemini_config.models.default.name,
-      )
-      # Use per-model API key if set, otherwise fall back to shared key.
-      effective_api_key = (
-          self._gemini_config.models.default.api_key
-          or self._gemini_config.api_key
-      )
-      if effective_api_key is not None:
-        gemini_config_proto.api_key = effective_api_key
-      thinking_level = (
-          self._gemini_config.models.default.generation.thinking_level
-      )
-      if thinking_level is not None:
-        gemini_config_proto.thinking_level = thinking_level.value
-
-      gemini_config_proto.use_vertex = self._gemini_config.vertex
-      if self._gemini_config.project is not None:
-        gemini_config_proto.project = self._gemini_config.project
-      if self._gemini_config.location is not None:
-        gemini_config_proto.location = self._gemini_config.location
-
+    models_protos = []
+    if self._models:
+      models_protos = build_models_proto(self._models)
     workspace_protos = [
         localharness_pb2.Workspace(
             filesystem_workspace=localharness_pb2.FilesystemWorkspace(
@@ -1620,9 +1697,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         and types.BuiltinTools.START_SUBAGENT in active_tools
     )
 
-    image_model_name = DEFAULT_IMAGE_GENERATION_MODEL
-    if self._gemini_config:
-      image_model_name = self._gemini_config.models.image_generation.name
+    image_model_name = self._get_image_model_name(cfg)
 
     harness_side_tools = localharness_pb2.HarnessSideTools(
         subagents=localharness_pb2.SubagentsConfig(enabled=subagent_enabled),
@@ -1664,7 +1739,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         tools=tool_protos,
         system_instructions=system_instructions_proto,
         cascade_id=self._conversation_id or "",
-        gemini_config=gemini_config_proto,
+        models=models_protos,
         workspaces=workspace_protos,
         skills_paths=self._skills_paths or [],
         harness_side_tools=harness_side_tools,
@@ -1684,27 +1759,19 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     return self._connection
 
   def _validate_connection(self) -> None:
-    """Validates that all required configurations (like API keys) are present."""
-    # Fail fast if no API key is available. The localharness binary requires
-    # a Gemini API key to call the Gemini API; without one it silently returns
-    # empty responses.
-    use_vertex = self._gemini_config.vertex if self._gemini_config else False
-    api_key = (
-        self._gemini_config.api_key if self._gemini_config else None
-    ) or os.environ.get("GEMINI_API_KEY")
-    if not use_vertex and not api_key:
-      raise types.AntigravityValidationError(
-          "A Gemini API key is required. Set it via"
-          " GeminiConfig(api_key=...) or the GEMINI_API_KEY environment"
-          " variable."
-      )
-    if use_vertex:
-      project = self._gemini_config.project if self._gemini_config else None
-      location = self._gemini_config.location if self._gemini_config else None
-      if not api_key and not (project and location):
+    """Validates that all required configurations are present."""
+    if not self._models:
+      return  # Backend handles default model selection.
+
+    for m in self._models:
+      if m.endpoint:
+        try:
+          m.endpoint.validate_endpoint()
+        except ValueError as e:
+          raise types.AntigravityValidationError(str(e)) from e
+      else:
         raise types.AntigravityValidationError(
-            "For Vertex AI, either a GCP project and location, or an API key"
-            " (Express Mode) must be set."
+            f"Model '{m.name}' must have an endpoint configured."
         )
 
   async def __aenter__(self) -> None:

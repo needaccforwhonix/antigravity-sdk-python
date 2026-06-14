@@ -647,9 +647,12 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
       async with agent.Agent(config):
         self.assertIsNone(os.environ.get("GEMINI_API_KEY"))
         _, kwargs = mock_strategy_class.call_args
-        gemini_config = kwargs.get("gemini_config")
-        self.assertIsNotNone(gemini_config)
-        self.assertEqual(gemini_config.api_key, "test_key")
+        models = kwargs.get("models")
+        self.assertIsNotNone(models)
+        text_model = next(
+            m for m in models if types.ModelType.TEXT in m.types
+        )
+        self.assertEqual(text_model.endpoint.api_key, "test_key")
 
   @mock.patch(
       "google.antigravity.connections."
@@ -670,9 +673,12 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
     )
     async with agent.Agent(config):
       _, kwargs = mock_strategy_class.call_args
-      gemini_config = kwargs.get("gemini_config")
-      self.assertIsNotNone(gemini_config)
-      self.assertEqual(gemini_config.models.default.name, "gemini-2.5-pro")
+      models = kwargs.get("models")
+      self.assertIsNotNone(models)
+      text_model = next(
+          m for m in models if types.ModelType.TEXT in m.types
+      )
+      self.assertEqual(text_model.name, "gemini-2.5-pro")
 
   @mock.patch(
       "google.antigravity.connections.local.local_connection.LocalConnectionStrategy"
@@ -801,58 +807,37 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
 class AgentConfigTest(unittest.TestCase):
   """Tests for AgentConfig sugar, conflict guards, and defensive copy."""
 
-  def test_sugar_model_flows_to_gemini_config(self):
-    """Verifies model sugar flows to gemini_config.models.default.name."""
+  def test_sugar_model_flows_to_models(self):
+    """Verifies model sugar flows to config.models."""
     config = local_connection.LocalAgentConfig(
         system_instructions="test", model="gemini-2.5-pro"
     )
-    self.assertEqual(config.gemini_config.models.default.name, "gemini-2.5-pro")
+    self.assertIsNotNone(config.models)
+    text_model = [m for m in config.models if types.ModelType.TEXT in m.types][
+        0
+    ]
+    self.assertEqual(text_model.name, "gemini-2.5-pro")
 
-  def test_sugar_api_key_flows_to_gemini_config(self):
-    """Verifies api_key sugar flows to gemini_config.api_key."""
+  def test_sugar_api_key_flows_to_models(self):
+    """Verifies api_key sugar flows to config.models."""
     config = local_connection.LocalAgentConfig(
         system_instructions="test", api_key="my-key"
     )
-    self.assertEqual(config.gemini_config.api_key, "my-key")
+    self.assertIsNotNone(config.models)
+    text_model = [m for m in config.models if types.ModelType.TEXT in m.types][
+        0
+    ]
+    self.assertIsInstance(text_model.endpoint, types.GeminiAPIEndpoint)
+    self.assertEqual(text_model.endpoint.api_key, "my-key")
 
-  def test_conflict_model_raises(self):
-    """Verifies ValueError when both model sugar and structured config are set."""
+  def test_model_models_mutual_exclusion(self):
+    """Verifies that model and models are mutually exclusive."""
     with self.assertRaises(ValueError):
       local_connection.LocalAgentConfig(
           system_instructions="test",
           model="gemini-2.5-pro",
-          gemini_config=types.GeminiConfig(
-              models=types.ModelConfig(
-                  default=types.ModelEntry(name="different-model"),
-              ),
-          ),
+          models=[types.ModelTarget(name="gemini-2.5-pro")]
       )
-
-  def test_conflict_api_key_raises(self):
-    """Verifies ValueError when both api_key sugar and gemini_config.api_key are set."""
-    with self.assertRaises(ValueError):
-      local_connection.LocalAgentConfig(
-          system_instructions="test",
-          api_key="sugar-key",
-          gemini_config=types.GeminiConfig(api_key="config-key"),
-      )
-
-  def test_defensive_copy(self):
-    """Verifies shared GeminiConfig is not cross-contaminated."""
-    shared = types.GeminiConfig()
-    config1 = local_connection.LocalAgentConfig(
-        system_instructions="test",
-        gemini_config=shared,
-        model="model-a",
-    )
-    config2 = local_connection.LocalAgentConfig(
-        system_instructions="test",
-        gemini_config=shared,
-        model="model-b",
-    )
-    self.assertEqual(config1.gemini_config.models.default.name, "model-a")
-    self.assertEqual(config2.gemini_config.models.default.name, "model-b")
-    self.assertEqual(shared.models.default.name, types.DEFAULT_MODEL)
 
   def test_defaults(self):
     """Verifies AgentConfig defaults: safe policies, default model."""
@@ -867,33 +852,26 @@ class AgentConfigTest(unittest.TestCase):
       self.assertEqual(config.policies[i].name, "workspace_only")
     self.assertEqual(config.policies[3].tool, "run_command")
     self.assertEqual(config.policies[4].tool, "*")
-    self.assertEqual(
-        config.gemini_config.models.default.name, types.DEFAULT_MODEL
-    )
-    self.assertIsNone(config.gemini_config.api_key)
+    self.assertIsNotNone(config.models)
+    text_model = [m for m in config.models if types.ModelType.TEXT in m.types][
+        0
+    ]
+    self.assertEqual(text_model.name, types.DEFAULT_MODEL)
 
   def test_model_sugar_does_not_clobber_image_generation(self):
     """Verifies model sugar only sets default slot, not image_generation."""
     config = local_connection.LocalAgentConfig(
         system_instructions="test", model="custom-chat-model"
     )
-    self.assertEqual(
-        config.gemini_config.models.default.name, "custom-chat-model"
-    )
-    self.assertEqual(
-        config.gemini_config.models.image_generation.name,
-        types.DEFAULT_IMAGE_GENERATION_MODEL,
-    )
-
-  def test_conflict_model_with_gemini_config_no_model(self):
-    """Verifies no conflict when gemini_config has no explicit default."""
-    config = local_connection.LocalAgentConfig(
-        system_instructions="test",
-        model="custom-model",
-        gemini_config=types.GeminiConfig(api_key="key-only"),
-    )
-    self.assertEqual(config.gemini_config.models.default.name, "custom-model")
-    self.assertEqual(config.gemini_config.api_key, "key-only")
+    self.assertIsNotNone(config.models)
+    text_model = [m for m in config.models if types.ModelType.TEXT in m.types][
+        0
+    ]
+    image_model = [
+        m for m in config.models if types.ModelType.IMAGE in m.types
+    ][0]
+    self.assertEqual(text_model.name, "custom-chat-model")
+    self.assertEqual(image_model.name, types.DEFAULT_IMAGE_GENERATION_MODEL)
 
   @mock.patch.object(lc_module, "LocalConnectionStrategy", autospec=True)
   @mock.patch.object(conversation.Conversation, "create", autospec=True)
