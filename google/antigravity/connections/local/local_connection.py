@@ -42,6 +42,7 @@ from google.antigravity import types
 from google.antigravity.connections import connection
 from google.antigravity.connections.local import localharness_pb2
 from google.antigravity.connections.local import types as local_types
+from google.antigravity.connections.local.hook_router import HookRouter
 from google.antigravity.hooks import hook_runner as h_runner
 from google.antigravity.hooks import hooks
 from google.antigravity.tools import tool_runner as t_runner
@@ -547,6 +548,9 @@ class LocalConnection(connection.Connection):
     self._ws = ws
     self._tool_runner = tool_runner
     self.__initial_history = initial_history or []
+    self._hook_router = (
+        HookRouter(hook_runner, self._send_input_event) if hook_runner else None
+    )
     self._step_trackers: dict[tuple[str, int], _StepTracker] = {}
     self._step_queue = asyncio.Queue()
     self._background_tasks = set()
@@ -886,6 +890,21 @@ class LocalConnection(connection.Connection):
         logging.info("RAW WS MSG: %s", raw_msg)
         event = localharness_pb2.OutputEvent()
         json_format.Parse(raw_msg, event)
+        if event.HasField("call_hook_request"):
+          if self._hook_router:
+            await self._hook_router.handle(event.call_hook_request)
+          else:
+            resp = localharness_pb2.CallHookResponse(
+                request_id=event.call_hook_request.request_id,
+                empty_result=localharness_pb2.EmptyResult(),
+            )
+            self._run_in_background(
+                self._send_input_event(
+                    localharness_pb2.InputEvent(call_hook_response=resp)
+                )
+            )
+          continue
+
         if event.HasField("step_update"):
           step_update = event.step_update
 
@@ -1279,6 +1298,10 @@ class LocalConnection(connection.Connection):
     )
     input_event = localharness_pb2.InputEvent(tool_confirmation=resp)
     await self._ws.send(json_format.MessageToJson(input_event))
+
+  async def _send_input_event(self, event: localharness_pb2.InputEvent) -> None:
+    """Helper to send an InputEvent over the WebSocket."""
+    await self._ws.send(json_format.MessageToJson(event))
 
   async def _handle_tool_call(
       self, tool_call: localharness_pb2.ToolCall
@@ -1707,6 +1730,10 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         _to_mcp_server_proto(s) for s in self._mcp_servers or []
     ]
 
+    enabled_hooks = []
+    if self._hook_runner and self._hook_runner.on_session_start_hooks:
+      enabled_hooks.append(localharness_pb2.LIFECYCLE_HOOK_ON_SESSION_START)
+
     return localharness_pb2.HarnessConfig(
         tools=tool_protos,
         system_instructions=system_instructions_proto,
@@ -1720,6 +1747,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         finish_tool_schema_json=cfg.finish_tool_schema_json or "",
         app_data_dir=self._app_data_dir or "",
         mcp_servers=mcp_server_protos,
+        enabled_hooks=enabled_hooks,
     )
 
   def connect(self) -> connection.Connection:
@@ -1843,11 +1871,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         initial_history=initial_history,
     )
     self._connection._start_stderr_reader(process.stderr)
-
-    # Dispatch session-start hook synchronously so it completes before
-    # any send() / dispatch_pre_turn() call.
-    if self._hook_runner and self._hook_runner.on_session_start_hooks:
-      await self._hook_runner.dispatch_session_start()
 
   async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
     """Tears down the backend and releases all resources."""
