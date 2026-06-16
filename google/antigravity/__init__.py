@@ -26,13 +26,9 @@ from google.antigravity.types import CustomSystemInstructions
 from google.antigravity.types import Document
 from google.antigravity.types import from_file
 from google.antigravity.types import GeminiAPIEndpoint
-from google.antigravity.types import GeminiConfig
 from google.antigravity.types import GeminiModelOptions
-from google.antigravity.types import GenerationConfig
 from google.antigravity.types import Image
-from google.antigravity.types import ModelConfig
 from google.antigravity.types import ModelEndpoint
-from google.antigravity.types import ModelEntry
 from google.antigravity.types import ModelTarget
 from google.antigravity.types import ModelType
 from google.antigravity.types import SystemInstructions
@@ -55,14 +51,10 @@ __all__ = [
     "CustomSystemInstructions",
     "Document",
     "GeminiAPIEndpoint",
-    "GeminiConfig",
-    "GenerationConfig",
-    "Image",
-    "ModelConfig",
-    "ModelTarget",
-    "ModelEndpoint",
-    "ModelEntry",
     "GeminiModelOptions",
+    "Image",
+    "ModelEndpoint",
+    "ModelTarget",
     "ModelType",
     "SystemInstructions",
     "SystemInstructionSection",

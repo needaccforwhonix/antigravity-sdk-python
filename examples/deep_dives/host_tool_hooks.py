@@ -234,7 +234,6 @@ async def run():
       capabilities=types.CapabilitiesConfig(
           enable_subagents=True,
       ),
-      gemini_config=types.GeminiConfig(),
   )
 
   logging.info("Starting agent...")

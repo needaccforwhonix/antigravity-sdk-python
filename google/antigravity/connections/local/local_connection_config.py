@@ -19,13 +19,14 @@ import os
 import pathlib
 import tempfile
 from typing import Any, Callable
-import warnings
 
 import pydantic
 
 from google.antigravity import types
 from google.antigravity.connections import connection
 from google.antigravity.hooks import policy
+from google.antigravity.models import DEFAULT_IMAGE_GENERATION_MODEL
+from google.antigravity.models import DEFAULT_MODEL
 
 DEFAULT_APP_DATA_DIR = (
     (pathlib.Path("~") / ".gemini" / "antigravity").expanduser().resolve()
@@ -58,12 +59,7 @@ class LocalAgentConfig(connection.AgentConfig):
   )
   workspaces: list[str] = pydantic.Field(default_factory=lambda: [os.getcwd()])
 
-  gemini_config: types.GeminiConfig | None = pydantic.Field(
-      default=None,
-      deprecated="gemini_config is deprecated; use the 'models' field instead.",
-  )
-
-  # Top-level shorthand fields — flow into gemini_config.
+  # Top-level shorthand fields — flow into models.
   model: str | types.ModelTarget | None = None
   models: list[types.ModelTarget] | None = None
   api_key: str | None = None
@@ -89,7 +85,6 @@ class LocalAgentConfig(connection.AgentConfig):
           dict[str, Any] | type[pydantic.BaseModel] | str | None
       ) = None,
       skills_paths: list[str] | None = None,
-      gemini_config: types.GeminiConfig | None = None,
       model: str | types.ModelTarget | None = None,
       models: list[types.ModelTarget] | None = None,
       api_key: str | None = None,
@@ -98,11 +93,7 @@ class LocalAgentConfig(connection.AgentConfig):
       location: str | None = None,
       **kwargs: Any,
   ):
-    self._validate_shorthand_fields(
-        model=model,
-        models=models,
-        api_key=api_key,
-    )
+
     init_data = {
         k: v
         for k, v in locals().items()
@@ -120,140 +111,81 @@ class LocalAgentConfig(connection.AgentConfig):
       raise ValueError(f"app_data_dir must be an absolute path, got '{v}'")
     return v
 
-  def _validate_shorthand_fields(
-      self,
-      model: Any,
-      models: Any,
-      api_key: Any,
-  ) -> None:
-    if model is not None and models is not None:
-      raise ValueError(
-          "Cannot set both 'model' (shorthand) and 'models' (full config). "
-          "Use 'model' for single-model setups, or 'models' for"
-          " multi-model setups."
-      )
-
-    used_shorthands = []
-    if api_key is not None:
-      used_shorthands.append("api_key")
-
-    if used_shorthands:
-      warnings.warn(
-          f"Shorthand fields {used_shorthands} are deprecated and will be"
-          " removed in a future version. Use the 'models' field instead.",
-          DeprecationWarning,
-          stacklevel=3,
-      )
-
-  def _build_models_from_shorthands(self) -> list[types.ModelTarget]:
-    """Builds the models list from top-level shorthand fields."""
-    endpoint = None
+  def _build_shorthand_endpoint(self) -> types.ModelEndpoint | None:
+    """Builds the custom endpoint from connection shorthand fields."""
     if self.vertex:
-      endpoint = types.VertexEndpoint(
+      return types.VertexEndpoint(
           project=self.project,
           location=self.location,
       )
-    else:
-      endpoint = types.GeminiAPIEndpoint(api_key=self.api_key)
+    return types.GeminiAPIEndpoint(api_key=self.api_key)
 
-    if isinstance(self.model, types.ModelTarget):
-      text_model = self.model.model_copy(deep=True)
-      if text_model.endpoint is None:
-        text_model.endpoint = endpoint
-    else:
-      model_name = self.model or types.DEFAULT_MODEL
-      text_model = types.ModelTarget(
-          name=model_name, types=[types.ModelType.TEXT], endpoint=endpoint
-      )
-
-    image_endpoint = endpoint.model_copy(deep=True) if endpoint else None
-    image_model = types.ModelTarget(
-        name=types.DEFAULT_IMAGE_GENERATION_MODEL,
-        types=[types.ModelType.IMAGE],
-        endpoint=image_endpoint,
-    )
-    return [text_model, image_model]
-
-  def _build_models_from_gemini_config(self) -> list[types.ModelTarget]:
-    """Builds the models list from gemini_config."""
-    if not self.gemini_config:
+  def _build_shorthand_models(
+      self, endpoint: types.ModelEndpoint | None
+  ) -> list[types.ModelTarget]:
+    """Builds the explicitly-specified shorthand models."""
+    if self.model is None:
       return []
 
-    gc = self.gemini_config
-    if gc.vertex:
-      endpoint = types.VertexEndpoint(
-          project=gc.project,
-          location=gc.location,
-          options=types.GeminiModelOptions(
-              thinking_level=gc.models.default.generation.thinking_level
-          )
-      )
+    if isinstance(self.model, types.ModelTarget):
+      shorthand_model = self.model.model_copy(deep=True)
+      if shorthand_model.endpoint is None:
+        shorthand_model.endpoint = endpoint
     else:
-      endpoint = types.GeminiAPIEndpoint(
-          api_key=gc.api_key,
-          options=types.GeminiModelOptions(
-              thinking_level=gc.models.default.generation.thinking_level
-          )
+      shorthand_model = types.ModelTarget(
+          name=self.model, types=[types.ModelType.TEXT], endpoint=endpoint
       )
+    return [shorthand_model]
 
+  def _build_default_models(
+      self, endpoint: types.ModelEndpoint | None
+  ) -> list[types.ModelTarget]:
+    """Builds the default text and image models."""
     text_model = types.ModelTarget(
-        name=gc.models.default.name,
+        name=DEFAULT_MODEL,
         types=[types.ModelType.TEXT],
         endpoint=endpoint,
     )
-
-    image_endpoint = endpoint.model_copy(deep=True) if endpoint else None
-    if image_endpoint and isinstance(
-        image_endpoint.options, types.GeminiModelOptions
-    ):
-      image_endpoint.options.thinking_level = (
-          gc.models.image_generation.generation.thinking_level
-      )
-
     image_model = types.ModelTarget(
-        name=gc.models.image_generation.name,
+        name=DEFAULT_IMAGE_GENERATION_MODEL,
         types=[types.ModelType.IMAGE],
-        endpoint=image_endpoint,
+        endpoint=endpoint,
     )
     return [text_model, image_model]
+
+  def _merge_models_list(self) -> list[types.ModelTarget]:
+    """Merges explicit, shorthand, and default models based on priority.
+
+    Priority order is: Explicit > Shorthand > Default.
+    Default models are only added if their types are not already present in the
+    collection.
+
+    Returns:
+      The merged list of model targets.
+    """
+    endpoint = self._build_shorthand_endpoint()
+    explicit_models = self.models or []
+    shorthand_models = self._build_shorthand_models(endpoint)
+    default_models = self._build_default_models(endpoint)
+
+    merged_models = list(explicit_models)
+    for model in shorthand_models:
+      merged_models.append(model)
+
+    existing_types = set()
+    for m in merged_models:
+      existing_types.update(m.types)
+
+    for default_model in default_models:
+      if not any(t in existing_types for t in default_model.types):
+        merged_models.append(default_model)
+
+    return merged_models
 
   @pydantic.model_validator(mode="after")
   def _apply_shorthand_configs(self) -> "LocalAgentConfig":
     """Applies top-level shorthand fields (model, api_key) to models."""
-    if self.gemini_config is not None:
-      warnings.warn(
-          "gemini_config is deprecated. Use the 'models' field instead.",
-          DeprecationWarning,
-          stacklevel=3,
-      )
-
-    user_provided_models = (
-        "models" in self.model_fields_set and self.models is not None
-    )
-    user_provided_gemini_config = (
-        "gemini_config" in self.model_fields_set
-        and self.gemini_config is not None
-    )
-    user_provided_shorthands = any(
-        field in self.model_fields_set and getattr(self, field) is not None
-        for field in ["model", "vertex", "project", "location"]
-    )
-
-    if user_provided_models and (
-        user_provided_gemini_config or user_provided_shorthands
-    ):
-      raise ValueError(
-          "Cannot set both the new 'models' list and the legacy"
-          " 'gemini_config' or shorthand fields (model, vertex, project,"
-          " location)."
-      )
-
-    if self.models is None:
-      if self.gemini_config is not None:
-        self.__dict__["models"] = self._build_models_from_gemini_config()
-      else:
-        self.__dict__["models"] = self._build_models_from_shorthands()
-
+    self.__dict__["models"] = self._merge_models_list()
     return self
 
   @pydantic.model_validator(mode="after")

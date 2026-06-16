@@ -122,13 +122,11 @@ import asyncio
 from google.antigravity.connections.local import LocalConnectionStrategy
 from google.antigravity.conversation.conversation import Conversation
 from google.antigravity.tools.tool_runner import ToolRunner
-from google.antigravity.types import GeminiConfig
 
 async def main():
     tool_runner = ToolRunner()
     strategy = LocalConnectionStrategy(
         tool_runner=tool_runner,
-        # gemini_config=GeminiConfig(api_key="your_api_key_here"),
     )
     
     async with Conversation.create(strategy) as conversation:

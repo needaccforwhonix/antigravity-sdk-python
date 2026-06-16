@@ -27,6 +27,8 @@ from google.antigravity.connections.local import local_connection as lc_module
 from google.antigravity.conversation import conversation
 from google.antigravity.hooks import hooks
 from google.antigravity.hooks import policy
+from google.antigravity.models import DEFAULT_IMAGE_GENERATION_MODEL
+from google.antigravity.models import DEFAULT_MODEL
 
 
 class AgentTest(unittest.IsolatedAsyncioTestCase):
@@ -755,15 +757,6 @@ class AgentConfigTest(unittest.TestCase):
     self.assertIsInstance(text_model.endpoint, types.GeminiAPIEndpoint)
     self.assertEqual(text_model.endpoint.api_key, "my-key")
 
-  def test_model_models_mutual_exclusion(self):
-    """Verifies that model and models are mutually exclusive."""
-    with self.assertRaises(ValueError):
-      local_connection.LocalAgentConfig(
-          system_instructions="test",
-          model="gemini-2.5-pro",
-          models=[types.ModelTarget(name="gemini-2.5-pro")]
-      )
-
   def test_defaults(self):
     """Verifies AgentConfig defaults: safe policies, default model."""
     config = local_connection.LocalAgentConfig(system_instructions="test")
@@ -781,7 +774,7 @@ class AgentConfigTest(unittest.TestCase):
     text_model = [m for m in config.models if types.ModelType.TEXT in m.types][
         0
     ]
-    self.assertEqual(text_model.name, types.DEFAULT_MODEL)
+    self.assertEqual(text_model.name, DEFAULT_MODEL)
 
   def test_model_sugar_does_not_clobber_image_generation(self):
     """Verifies model sugar only sets default slot, not image_generation."""
@@ -796,7 +789,7 @@ class AgentConfigTest(unittest.TestCase):
         m for m in config.models if types.ModelType.IMAGE in m.types
     ][0]
     self.assertEqual(text_model.name, "custom-chat-model")
-    self.assertEqual(image_model.name, types.DEFAULT_IMAGE_GENERATION_MODEL)
+    self.assertEqual(image_model.name, DEFAULT_IMAGE_GENERATION_MODEL)
 
   @mock.patch.object(lc_module, "LocalConnectionStrategy", autospec=True)
   @mock.patch.object(conversation.Conversation, "create", autospec=True)

@@ -40,6 +40,7 @@ from google.antigravity.connections.local import test_utils
 from google.antigravity.hooks import hook_runner
 from google.antigravity.hooks import hooks as hooks_base
 from google.antigravity.hooks import policy
+from google.antigravity.models import DEFAULT_MODEL
 from google.antigravity.tools import tool_runner
 from google.antigravity.types import QuestionResponse
 
@@ -1534,25 +1535,6 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     self.assertEqual(len(config.workspaces), 0)
     self.assertEqual(len(config.skills_paths), 0)
 
-  def test_legacy_gemini_config_produces_valid_proto(self):
-    """Verifies that the legacy gemini_config translates to the models proto."""
-    legacy_config = types.GeminiConfig(
-        api_key="legacy-key",
-        models=types.ModelConfig(
-            default="gemini-2.5-pro",
-        )
-    )
-    # We construct LocalAgentConfig with gemini_config
-    cfg = local_connection_config.LocalAgentConfig(gemini_config=legacy_config)
-    strategy = self._make_strategy(
-        models=cfg.models,
-    )
-    config = strategy._build_harness_config()
-    self.assertLen(config.models, 2)
-    self.assertEqual(config.models[0].name, "gemini-2.5-pro")
-    self.assertEqual(config.models[0].types, [localharness_pb2.MODEL_TYPE_TEXT])
-    self.assertEqual(config.models[0].gemini_api_endpoint.api_key, "legacy-key")
-
   def test_legacy_shorthands_api_key_produces_valid_proto(self):
     """Verifies that the legacy api_key shorthand translates to the models proto."""
     cfg = local_connection_config.LocalAgentConfig(
@@ -1565,6 +1547,7 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     config = strategy._build_harness_config()
     self.assertLen(config.models, 2)
     self.assertEqual(config.models[0].name, "gemini-2.5-flash")
+    self.assertTrue(config.models[0].HasField("gemini_api_endpoint"))
     self.assertEqual(
         config.models[0].gemini_api_endpoint.api_key, "shorthand-key"
     )
@@ -1602,31 +1585,6 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     config = strategy._build_harness_config()
     self.assertEqual(config.finish_tool_schema_json, '{"type": "object"}')
 
-  def test_legacy_gemini_config_deprecation_and_conversion(self):
-    """Verifies that legacy gemini_config translates to the models field."""
-    legacy_config = types.GeminiConfig(
-        api_key="test-key",
-        models=types.ModelConfig(
-            default=types.ModelEntry(
-                name="gemini-2.5-pro",
-                generation=types.GenerationConfig(
-                    thinking_level=types.ThinkingLevel.HIGH
-                ),
-            )
-        ),
-    )
-    with self.assertWarns(DeprecationWarning):
-      cfg = local_connection_config.LocalAgentConfig(
-          gemini_config=legacy_config
-      )
-    strategy = self._make_strategy(models=cfg.models)
-    config = strategy._build_harness_config()
-    self.assertEqual(config.models[0].name, "gemini-2.5-pro")
-    self.assertEqual(config.models[0].gemini_api_endpoint.api_key, "test-key")
-    self.assertEqual(
-        config.models[0].gemini_api_endpoint.options.thinking_level, "high"
-    )
-
   def test_gemini_config_to_proto(self):
     """Verifies GeminiConfig fields translate to the correct proto fields.
 
@@ -1648,22 +1606,15 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     self.assertEqual(config.models[0].name, "gemini-2.5-pro")
 
   def test_gemini_config_none_fields_omitted(self):
-    """Verifies that None fields on GeminiConfig are not set on the proto.
-
-    Why: The Go harness uses proto field presence to determine whether to
-    apply overrides. Setting empty strings would be semantically wrong.
-    How: Create a GeminiConfig with defaults (api_key=None), build proto,
-    and assert api_key is not populated.
-    """
-    strategy = self._make_strategy(
-        models=[
-            types.ModelTarget(
-                name="gemini-3.5-flash",
-                types=[types.ModelType.TEXT],
-                endpoint=types.GeminiAPIEndpoint(api_key=None),
-            )
-        ]
-    )
+    """Verifies that None fields on ModelConfig are not set on the proto."""
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.GeminiAPIEndpoint(),
+        )
+    ]
+    strategy = self._make_strategy(models=models)
     config = strategy._build_harness_config()
     self.assertEqual(config.models[0].name, "gemini-3.5-flash")
     # api_key should not be set (proto default empty string).
@@ -1671,9 +1622,14 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
 
   def test_models_default_model_name(self):
     """Verifies the default model name propagates correctly."""
-    strategy = self._make_strategy(
-        models=[types.ModelTarget(types=[types.ModelType.TEXT])]
-    )
+    models = [
+        types.ModelTarget(
+            name=None,
+            types=[types.ModelType.TEXT],
+            endpoint=types.GeminiAPIEndpoint(),
+        )
+    ]
+    strategy = self._make_strategy(models=models)
     config = strategy._build_harness_config()
     self.assertEqual(config.models[0].name, "")
 
@@ -1872,7 +1828,6 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
         )
     )
     config = strategy._build_harness_config()
-    config.harness_side_tools.generate_image.ClearField("model_name")
 
     expected_harness_side_tools = localharness_pb2.HarnessSideTools(
         view_file=localharness_pb2.ViewFileToolConfig(enabled=True),
@@ -1977,7 +1932,7 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     strategy = self._make_strategy(
         models=[
             types.ModelTarget(
-                name=types.DEFAULT_MODEL,
+                name=DEFAULT_MODEL,
                 types=[types.ModelType.TEXT],
                 endpoint=types.GeminiAPIEndpoint(
                     options=types.GeminiModelOptions(
@@ -1997,7 +1952,7 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     strategy = self._make_strategy(
         models=[
             types.ModelTarget(
-                name=types.DEFAULT_MODEL,
+                name=DEFAULT_MODEL,
                 types=[types.ModelType.TEXT],
                 endpoint=types.GeminiAPIEndpoint(
                     options=types.GeminiModelOptions(thinking_level=None),
@@ -2016,7 +1971,7 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
       strategy = self._make_strategy(
           models=[
               types.ModelTarget(
-                  name=types.DEFAULT_MODEL,
+                  name=DEFAULT_MODEL,
                   types=[types.ModelType.TEXT],
                   endpoint=types.GeminiAPIEndpoint(
                       options=types.GeminiModelOptions(thinking_level=level),
@@ -2065,6 +2020,7 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
         types.ModelTarget(
             name="imagen-3-custom",
             types=[types.ModelType.IMAGE],
+            endpoint=types.GeminiAPIEndpoint(),
         ),
     ]
     strategy = self._make_strategy(models=models)
@@ -2077,8 +2033,9 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     )
 
     # Image model assertions
+    self.assertEqual(config.models[1].name, "imagen-3-custom")
     self.assertEqual(
-        config.harness_side_tools.generate_image.model_name, "imagen-3-custom"
+        config.models[1].types, [localharness_pb2.MODEL_TYPE_IMAGE]
     )
 
   def test_models_list_custom_endpoints_propagate(self):
@@ -3849,6 +3806,52 @@ class LocalAgentConfigTest(absltest.TestCase):
     self.assertLen(text_models, 1)
     self.assertEqual(text_models[0].name, "gemini-2.5-pro")
 
+  def test_merge_models_only_defaults(self):
+    config = local_connection_config.LocalAgentConfig()
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, DEFAULT_MODEL)
+    self.assertEqual(config.models[0].types, [types.ModelType.TEXT])
+    self.assertEqual(
+        config.models[1].name,
+        local_connection_config.DEFAULT_IMAGE_GENERATION_MODEL,
+    )
+    self.assertEqual(config.models[1].types, [types.ModelType.IMAGE])
+
+  def test_merge_models_shorthand_only(self):
+    config = local_connection_config.LocalAgentConfig(model="custom-text-model")
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, "custom-text-model")
+    self.assertEqual(config.models[0].types, [types.ModelType.TEXT])
+    self.assertEqual(
+        config.models[1].name,
+        local_connection_config.DEFAULT_IMAGE_GENERATION_MODEL,
+    )
+    self.assertEqual(config.models[1].types, [types.ModelType.IMAGE])
+
+  def test_merge_models_explicit_only(self):
+    custom_image = types.ModelTarget(
+        name="custom-image-model", types=[types.ModelType.IMAGE]
+    )
+    config = local_connection_config.LocalAgentConfig(models=[custom_image])
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, "custom-image-model")
+    self.assertEqual(config.models[0].types, [types.ModelType.IMAGE])
+    self.assertEqual(config.models[1].name, DEFAULT_MODEL)
+    self.assertEqual(config.models[1].types, [types.ModelType.TEXT])
+
+  def test_merge_models_explicit_and_shorthand(self):
+    custom_image = types.ModelTarget(
+        name="custom-image-model", types=[types.ModelType.IMAGE]
+    )
+    config = local_connection_config.LocalAgentConfig(
+        model="custom-text-model", models=[custom_image]
+    )
+    self.assertLen(config.models, 2)
+    self.assertEqual(config.models[0].name, "custom-image-model")
+    self.assertEqual(config.models[0].types, [types.ModelType.IMAGE])
+    self.assertEqual(config.models[1].name, "custom-text-model")
+    self.assertEqual(config.models[1].types, [types.ModelType.TEXT])
+
   def test_constructor_parameters_fully_typed(self):
     """Verifies all subclass fields are accepted by the constructor under pytype."""
     config = local_connection_config.LocalAgentConfig(
@@ -3865,7 +3868,7 @@ class LocalAgentConfigTest(absltest.TestCase):
         app_data_dir="/tmp/app",
         response_schema="{}",
         skills_paths=["/tmp/skills"],
-        gemini_config=types.GeminiConfig(),
+
         model="gemini-2.5-pro",
         api_key="fake_api_key",
         vertex=True,
@@ -3983,6 +3986,7 @@ class LocalAgentConfigTest(absltest.TestCase):
     config = local_connection_config.LocalAgentConfig(
         system_instructions="test",
         mcp_servers=[stdio_cfg, sse_cfg],
+        api_key="fake",
     )
 
     mock_tool_runner = mock.create_autospec(

@@ -44,7 +44,6 @@ from google.antigravity.connections.local import localharness_pb2
 from google.antigravity.connections.local import types as local_types
 from google.antigravity.hooks import hook_runner as h_runner
 from google.antigravity.hooks import hooks
-from google.antigravity.models import DEFAULT_IMAGE_GENERATION_MODEL
 from google.antigravity.tools import tool_runner as t_runner
 
 _ANY_ADAPTER = pydantic.TypeAdapter(Any)
@@ -419,7 +418,6 @@ def build_gemini_options_proto(
 
 def build_models_proto(
     models: list[types.ModelTarget],
-    default_api_key: str | None = None,
 ) -> list[localharness_pb2.ModelConfig]:
   """Builds a list of ModelConfig protos from a ModelConfig list."""
   protos = []
@@ -429,11 +427,10 @@ def build_models_proto(
         types=[to_proto_model_type(t) for t in m.types],
     )
     if isinstance(m.endpoint, types.GeminiAPIEndpoint):
-      api_key = m.endpoint.api_key or default_api_key
       api_endpoint_proto = localharness_pb2.GeminiAPIEndpoint(
           base_url=m.endpoint.base_url or "",
           http_headers=m.endpoint.http_headers or {},
-          api_key=api_key or "",
+          api_key=m.endpoint.api_key or "",
       )
       if m.endpoint.options and m.endpoint.options.model_dump(
           exclude_none=True
@@ -457,13 +454,7 @@ def build_models_proto(
         )
       proto.vertex_endpoint.CopyFrom(vertex_endpoint_proto)
     else:
-      # Endpoint is None. Apply default API key if provided.
-      if default_api_key:
-        proto.gemini_api_endpoint.CopyFrom(
-            localharness_pb2.GeminiAPIEndpoint(
-                api_key=default_api_key,
-            )
-        )
+      raise ValueError(f"Unrecognized endpoint type: {type(m.endpoint)}")
     protos.append(proto)
   return protos
 
@@ -1555,7 +1546,7 @@ def _to_mcp_server_proto(
 class LocalConnectionStrategy(connection.ConnectionStrategy):
   """Strategy for establishing a LocalConnection."""
 
-  _models: list[types.ModelTarget] | None
+  _models: list[types.ModelTarget]
   _system_instructions: types.SystemInstructions | None
   _connection: LocalConnection | None
 
@@ -1594,7 +1585,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     self._hook_runner = hook_runner
     self._connection: LocalConnection | None = None
     self._mcp_servers = mcp_servers or []
-    self._models = models
+    self._models: list[types.ModelTarget] = models or []
     self._skills_paths = skills_paths
 
     # Normalize str shorthand to SystemInstructions model.
@@ -1612,40 +1603,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     self._save_dir = save_dir
     self._workspaces = [normalize_wire_path(ws) for ws in workspaces or []]
     self._app_data_dir = app_data_dir
-
-  # TODO(b/2142387): These will go away / be promoted in the following CL when
-  # Go support is done.
-  def _find_model_by_type(
-      self, models: list[types.ModelTarget], model_type: types.ModelType
-  ) -> types.ModelTarget | None:
-    """Finds a model of the given type from the list, with robust fallback and logging."""
-    matching = [m for m in models if model_type in m.types]
-    if not matching:
-      logging.debug("No model of type %s found in models list", model_type)
-      return None
-
-    if len(matching) > 1:
-      logging.info(
-          "Multiple models of type %s found: %s. Using the first one: %s",
-          model_type,
-          [m.name for m in matching],
-          matching[0].name,
-      )
-    return matching[0]
-
-  # TODO(b/2142387): These will go away / be promoted in the following CL when
-  # Go support is done.
-  def _get_image_model_name(
-      self, cfg: types.CapabilitiesConfig
-  ) -> str:
-    """Returns the image model name from models list."""
-    if self._models:
-      image_model = self._find_model_by_type(
-          self._models, types.ModelType.IMAGE
-      )
-      if image_model and image_model.name:
-        return image_model.name
-    return DEFAULT_IMAGE_GENERATION_MODEL
 
   def _build_harness_config(self) -> localharness_pb2.HarnessConfig:
     """Translates Pydantic config objects into a HarnessConfig proto."""
@@ -1679,9 +1636,7 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
           appended.appended_sections.add(title=sec.title, content=sec.content)
         system_instructions_proto.appended.CopyFrom(appended)
 
-    models_protos = []
-    if self._models:
-      models_protos = build_models_proto(self._models)
+    models_protos = build_models_proto(self._models)
     workspace_protos = [
         localharness_pb2.Workspace(
             filesystem_workspace=localharness_pb2.FilesystemWorkspace(
@@ -1706,8 +1661,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         cfg.enable_subagents
         and types.BuiltinTools.START_SUBAGENT in active_tools
     )
-
-    image_model_name = self._get_image_model_name(cfg)
 
     harness_side_tools = localharness_pb2.HarnessSideTools(
         subagents=localharness_pb2.SubagentsConfig(enabled=subagent_enabled),
@@ -1737,7 +1690,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         ),
         generate_image=localharness_pb2.GenerateImageToolConfig(
             enabled=types.BuiltinTools.GENERATE_IMAGE in active_tools,
-            model_name=image_model_name,
         ),
         search_web=localharness_pb2.SearchWebToolConfig(
             enabled=types.BuiltinTools.SEARCH_WEB in active_tools

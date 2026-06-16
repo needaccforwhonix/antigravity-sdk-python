@@ -26,11 +26,8 @@ import enum
 import mimetypes
 import pathlib
 from typing import Annotated, Any, AsyncIterator, Callable, Literal, TypeVar, cast
-import warnings
 
 import pydantic
-from google.antigravity.models import DEFAULT_IMAGE_GENERATION_MODEL
-from google.antigravity.models import DEFAULT_MODEL
 from google.antigravity.models import GeminiAPIEndpoint
 from google.antigravity.models import GeminiModelOptions
 from google.antigravity.models import ModelEndpoint
@@ -43,10 +40,6 @@ _BaseMediaT = TypeVar("_BaseMediaT", bound="_BaseMedia")
 
 __all__ = [
     "ThinkingLevel",
-    "GenerationConfig",
-    "ModelEntry",
-    "ModelConfig",
-    "GeminiConfig",
     "ModelType",
     "ModelEndpoint",
     "GeminiAPIEndpoint",
@@ -97,90 +90,6 @@ __all__ = [
 # =============================================================================
 # Config types
 # =============================================================================
-
-@warnings.deprecated(
-    "GenerationConfig is deprecated; use ModelOptions instead."
-)
-class GenerationConfig(pydantic.BaseModel):
-  """Generation parameters for a model.
-
-  Attributes:
-    thinking_level: Thinking level for models that support extended thinking.
-      When None, the model's default level is used.
-  """
-
-  thinking_level: ThinkingLevel | None = None
-
-
-def _coerce_model_entry(v: "ModelEntry | str") -> "ModelEntry":
-  """Coerce a bare model name string into a ModelEntry."""
-  if isinstance(v, str):
-    return ModelEntry(name=v)
-  return v
-
-
-@warnings.deprecated("ModelEntry is deprecated; use ModelConfig instead.")
-class ModelEntry(pydantic.BaseModel):
-  """A model with optional auth and generation overrides.
-
-  Attributes:
-    name: Model name (e.g. 'gemini-3.1-pro-preview').
-    api_key: Per-model API key override. Falls back to GeminiConfig.api_key.
-    generation: Generation parameters for this model.
-  """
-
-  name: str
-  api_key: str | None = None
-  generation: GenerationConfig = pydantic.Field(
-      default_factory=GenerationConfig
-  )
-
-
-@warnings.deprecated(
-    "ModelConfig (legacy) is deprecated; use ModelTarget instead."
-)
-class ModelConfig(pydantic.BaseModel):
-  """Model selection for each capability.
-
-  Slots accept a bare model name string (coerced to ModelEntry) or
-  a ModelEntry for per-model overrides. After validation, all slots
-  are always ModelEntry.
-
-  Attributes:
-    default: The primary reasoning model.
-    image_generation: The model used for image generation.
-  """
-
-  default: Annotated[
-      ModelEntry, pydantic.BeforeValidator(_coerce_model_entry)
-  ] = pydantic.Field(default_factory=lambda: ModelEntry(name=DEFAULT_MODEL))
-  image_generation: Annotated[
-      ModelEntry, pydantic.BeforeValidator(_coerce_model_entry)
-  ] = pydantic.Field(
-      default_factory=lambda: ModelEntry(name=DEFAULT_IMAGE_GENERATION_MODEL)
-  )
-
-
-@warnings.deprecated(
-    "GeminiConfig is deprecated; use AgentConfig.models instead."
-)
-class GeminiConfig(pydantic.BaseModel):
-  """Configuration for the Gemini model backend.
-
-  Attributes:
-    api_key: Shared API key for all models. Falls back to $GEMINI_API_KEY if not
-      set. Individual ModelEntry instances can override this.
-    vertex: If True, uses the Vertex AI backend instead of Gemini Developer API.
-    project: GCP Project ID for Vertex AI.
-    location: GCP Location/Region for Vertex AI (e.g., "us-central1").
-    models: Per-modality model selection and configuration.
-  """
-
-  api_key: str | None = None
-  vertex: bool = False
-  project: str | None = None
-  location: str | None = None
-  models: ModelConfig = pydantic.Field(default_factory=ModelConfig)
 
 
 class SystemInstructionSection(pydantic.BaseModel):
