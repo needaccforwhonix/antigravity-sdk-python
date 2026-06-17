@@ -581,6 +581,7 @@ class LocalConnection(connection.Connection):
     # Flag set early in disconnect() so the reader loop can distinguish
     # expected closures from harness crashes.
     self._disconnecting = False
+    self._session_end_done = asyncio.Event()
 
     # Stderr lines from the Go harness, captured by a background thread.
     # Retained in a bounded deque so the reader loop can surface harness
@@ -810,11 +811,13 @@ class LocalConnection(connection.Connection):
     self._disconnecting = True
     hook_error = None
 
-    # Dispatch session end hook before tearing down. If the hook raises,
-    # capture the error but still proceed with graceful cleanup.
+    # Dispatch session end hook before tearing down via Go localharness RPC.
     if self._hook_runner and self._hook_runner.on_session_end_hooks:
       try:
-        await self._hook_runner.dispatch_session_end()
+        await self._send_input_event(
+            localharness_pb2.InputEvent(session_end_request=True)
+        )
+        await self._session_end_done.wait()
       except Exception as e:  # pylint: disable=broad-except
         hook_error = e
 
@@ -892,7 +895,9 @@ class LocalConnection(connection.Connection):
         json_format.Parse(raw_msg, event)
         if event.HasField("call_hook_request"):
           if self._hook_router:
-            await self._hook_router.handle(event.call_hook_request)
+            self._run_in_background(
+                self._hook_router.handle(event.call_hook_request)
+            )
           else:
             resp = localharness_pb2.CallHookResponse(
                 request_id=event.call_hook_request.request_id,
@@ -903,6 +908,10 @@ class LocalConnection(connection.Connection):
                     localharness_pb2.InputEvent(call_hook_response=resp)
                 )
             )
+          continue
+
+        if event.HasField("session_end_response"):
+          self._session_end_done.set()
           continue
 
         if event.HasField("step_update"):
@@ -1841,6 +1850,8 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     enabled_hooks = []
     if self._hook_runner and self._hook_runner.on_session_start_hooks:
       enabled_hooks.append(localharness_pb2.LIFECYCLE_HOOK_ON_SESSION_START)
+    if self._hook_runner and self._hook_runner.on_session_end_hooks:
+      enabled_hooks.append(localharness_pb2.LIFECYCLE_HOOK_ON_SESSION_END)
 
     custom_agents_protos = self._build_custom_subagents_protos(
         main_agent_tool_protos

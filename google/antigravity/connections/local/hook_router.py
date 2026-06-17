@@ -44,6 +44,12 @@ class HookRouter:
       ):
         await self._hook_runner.dispatch_session_start()
         resp.empty_result.CopyFrom(localharness_pb2.EmptyResult())
+      elif (
+          req.type == localharness_pb2.LIFECYCLE_HOOK_ON_SESSION_END
+          or req.name == "OnSessionEnd"
+      ):
+        await self._hook_runner.dispatch_session_end()
+        resp.empty_result.CopyFrom(localharness_pb2.EmptyResult())
       else:
         logging.warning(
             "Unknown or unhandled hook received -> type: %s, name: %s",

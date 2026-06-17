@@ -2475,7 +2475,7 @@ class LocalConnectionSessionHooksTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(called, ["started"])
 
   async def test_session_end_hook_dispatched_on_disconnect(self):
-    """Verifies OnSessionEndHook fires when disconnect() is called."""
+    """Verifies OnSessionEndHook fires via LSP handshake when disconnect() is called."""
     called = []
     event = asyncio.Event()
 
@@ -2495,8 +2495,33 @@ class LocalConnectionSessionHooksTest(unittest.IsolatedAsyncioTestCase):
         hook_runner=hr,
     )
 
-    await harness.conn.disconnect()
-    await asyncio.wait_for(event.wait(), timeout=1.0)
+    disconnect_task = asyncio.create_task(harness.conn.disconnect())
+
+    # 1. SDK emits session_end_request
+    resp = await harness.wait_for_response()
+    self.assertTrue(resp.get("sessionEndRequest"))
+
+    # 2. Simulate Go harness sending CallHookRequest(OnSessionEnd)
+    req = localharness_pb2.CallHookRequest(
+        request_id="req_end",
+        name="OnSessionEnd",
+        type=localharness_pb2.LIFECYCLE_HOOK_ON_SESSION_END,
+    )
+    await harness.send_event(
+        localharness_pb2.OutputEvent(call_hook_request=req)
+    )
+
+    # 3. SDK routes request and replies CallHookResponse
+    hook_resp = await harness.wait_for_response()
+    self.assertIn("callHookResponse", hook_resp)
+    self.assertEqual(hook_resp["callHookResponse"]["requestId"], "req_end")
+
+    # 4. Simulate Go harness sending SessionEndResponse
+    await harness.send_event(
+        localharness_pb2.OutputEvent(session_end_response=True)
+    )
+
+    await asyncio.wait_for(disconnect_task, timeout=1.0)
     self.assertEqual(called, ["ended"])
 
 

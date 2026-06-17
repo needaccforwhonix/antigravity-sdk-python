@@ -61,6 +61,43 @@ class HookRouterTest(absltest.TestCase):
 
     asyncio.run(_test())
 
+  def test_handle_on_session_end(self):
+
+    async def _test():
+      fired = asyncio.Event()
+
+      @hooks.on_session_end
+      async def my_hook():
+        fired.set()
+
+      hook_runner = h_runner.HookRunner(
+          on_session_end_hooks=[my_hook],
+      )
+
+      sent_events = []
+
+      async def mock_send(event: localharness_pb2.InputEvent):
+        sent_events.append(event)
+
+      router = HookRouter(hook_runner, mock_send)
+
+      req = localharness_pb2.CallHookRequest(
+          request_id="test_req_end",
+          name="OnSessionEnd",
+          type=localharness_pb2.LIFECYCLE_HOOK_ON_SESSION_END,
+      )
+
+      await router.handle(req)
+
+      self.assertTrue(fired.is_set())
+      self.assertLen(sent_events, 1)
+      self.assertTrue(sent_events[0].HasField("call_hook_response"))
+      resp = sent_events[0].call_hook_response
+      self.assertEqual(resp.request_id, "test_req_end")
+      self.assertTrue(resp.HasField("empty_result"))
+
+    asyncio.run(_test())
+
   def test_handle_unknown_hook(self):
 
     async def _test():
