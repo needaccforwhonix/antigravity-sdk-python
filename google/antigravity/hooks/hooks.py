@@ -286,3 +286,21 @@ on_session_end = _make_hook_decorator(OnSessionEndHook, pass_data=False)
 post_turn = _make_hook_decorator(PostTurnHook)
 post_tool_call = _make_hook_decorator(PostToolCallHook)
 on_tool_error = _make_hook_decorator(OnToolErrorHook)
+
+
+# Internal hooks for telemetry
+class _PreStepHook(InspectHook[types.Step]):
+  """Invoked when a step is first seen in the stream (internal)."""
+
+  pass
+
+
+class _PostStepHook(InspectHook[types.Step]):
+  """Invoked when a step completes (internal)."""
+
+  pass
+
+
+_pre_step = _make_hook_decorator(_PreStepHook)
+_post_step = _make_hook_decorator(_PostStepHook)
+

@@ -56,6 +56,8 @@ class _StepTracker:
 
   state: int = localharness_pb2.StepUpdate.State.STATE_UNSPECIFIED
   handled_requests: set[str] = dataclasses.field(default_factory=set)
+  pre_step_dispatched: bool = False
+  post_step_dispatched: bool = False
 
   def update_state(self, new_state: int) -> None:
     """Updates state and clears handled requests if transitioning out of waiting."""
@@ -251,7 +253,6 @@ def normalize_wire_path(path: str) -> str:
 class LocalConnectionStep(types.Step):
   """Connection-specific step for LocalConnection."""
 
-  cascade_id: str = ""
   trajectory_id: str = ""
   http_code: int = 0
 
@@ -328,6 +329,8 @@ class LocalConnectionStep(types.Step):
       step_type = types.StepType.TOOL_CALL
     elif step_dict.get("text"):
       step_type = types.StepType.TEXT_RESPONSE
+    elif step_dict.get("thinking"):
+      step_type = types.StepType.THINKING
 
     source_str = step_dict.get("source")
     source = (
@@ -376,7 +379,6 @@ class LocalConnectionStep(types.Step):
     return cls(
         id=id_str,
         step_index=step_idx,
-        cascade_id=step_dict.get("cascade_id", ""),
         trajectory_id=traj_id,
         type=step_type,
         source=source,
@@ -571,12 +573,8 @@ class LocalConnection(connection.Connection):
     # trajectory, and consumed when that trajectory goes idle.
     self._subagent_responses: dict[str, str] = {}
     self._parent_idle = True
-    # The cascade_id from step updates identifies the parent trajectory.
-    # A step belongs to the parent trajectory when cascade_id ==
-    # trajectory_id; otherwise it belongs to a subagent trajectory.
-    # We store the cascade_id so TrajectoryStateUpdate (which lacks the
-    # field) can distinguish parent vs. subagent trajectories.
-    self._cascade_id: str | None = None
+    # The main trajectory ID is tracked on the first step we see.
+    self._main_trajectory_id: str | None = None
 
     # Flag set early in disconnect() so the reader loop can distinguish
     # expected closures from harness crashes.
@@ -611,7 +609,7 @@ class LocalConnection(connection.Connection):
   @property
   def conversation_id(self) -> str:
     """Returns the conversation identifier, if one exists."""
-    return self._cascade_id or ""
+    return self._main_trajectory_id or ""
 
   async def send(self, prompt: types.Content | None, **kwargs: Any) -> None:
     """Sends a prompt to the agent.
@@ -626,6 +624,7 @@ class LocalConnection(connection.Connection):
     self._parent_idle = False
     self._active_subagent_ids.clear()
     self._subagent_responses.clear()
+    self._main_trajectory_id = None
     if self._hook_runner:
       res, turn_context = await self._hook_runner.dispatch_pre_turn(prompt)
       self._current_turn_context = turn_context
@@ -687,6 +686,7 @@ class LocalConnection(connection.Connection):
         if self._is_idle.is_set() and self._step_queue.empty():
           if self._client_cancelled:
             raise types.AntigravityCancelledError()
+          self._current_turn_context = None
           return
 
         step_obj = await self._step_queue.get()
@@ -735,14 +735,24 @@ class LocalConnection(connection.Connection):
             types.StepStatus.CANCELED,
         )
         is_target_user = getattr(step_obj, "target", None) == "TARGET_USER"
+        is_main_trajectory = (
+            getattr(step_obj, "trajectory_id", None) == self._main_trajectory_id
+        )
 
-        if is_terminal and is_target_user and is_from_model:
+        if (
+            is_terminal
+            and is_target_user
+            and is_from_model
+            and is_main_trajectory
+        ):
           # Dispatch post-turn hook with the final response content.
           if self._hook_runner and self._current_turn_context:
             await self._hook_runner.dispatch_post_turn(
                 self._current_turn_context, step_obj.content or ""
             )
-            self._current_turn_context = None
+            # We keep self._current_turn_context alive for late-arriving events
+            # (compaction, subagents, tool completions) and only clear it
+            # when the connection goes idle.
           # Don't force idle here — wait for the TrajectoryStateUpdate
           # path to confirm that the parent and all subagent trajectories
           # have completed.
@@ -943,13 +953,35 @@ class LocalConnection(connection.Connection):
             step_obj = parsed_step
           await self._step_queue.put(step_obj)
 
-          # Record the cascade_id for use by TrajectoryStateUpdate
-          # (which does not carry a cascade_id field).
+          # Record the main trajectory ID on the first step we see
+          if self._main_trajectory_id is None and step_update.trajectory_id:
+            self._main_trajectory_id = step_update.trajectory_id
+
+          # Dispatch Telemetry Internal Step Hooks
           if (
-              step_update.cascade_id
-              and step_update.cascade_id == step_update.trajectory_id
+              not tracker.pre_step_dispatched
+              and self._hook_runner
+              and step_update.state
+              != localharness_pb2.StepUpdate.State.STATE_UNSPECIFIED
           ):
-            self._cascade_id = step_update.cascade_id
+            tracker.pre_step_dispatched = True
+            await self._hook_runner.dispatch_pre_step(
+                self._get_turn_context(), step_obj
+            )
+
+          is_terminal = step_update.state in (
+              localharness_pb2.StepUpdate.State.STATE_DONE,
+              localharness_pb2.StepUpdate.State.STATE_ERROR,
+          )
+          if (
+              is_terminal
+              and not tracker.post_step_dispatched
+              and self._hook_runner
+          ):
+            tracker.post_step_dispatched = True
+            await self._hook_runner.dispatch_post_step(
+                self._get_turn_context(), step_obj
+            )
 
           # 3. Dispatch observe-only hooks for special step types.
           if step_obj.type == types.StepType.COMPACTION and self._hook_runner:
@@ -965,9 +997,9 @@ class LocalConnection(connection.Connection):
           # as tool responses; we capture the last model text here so the
           # PostToolCallHook receives the subagent's actual output.
           is_subagent_step = (
-              self._cascade_id
+              self._main_trajectory_id
               and step_obj.trajectory_id
-              and step_obj.trajectory_id != self._cascade_id
+              and step_obj.trajectory_id != self._main_trajectory_id
           )
           if (
               is_subagent_step
@@ -1040,7 +1072,8 @@ class LocalConnection(connection.Connection):
         elif event.HasField("trajectory_state_update"):
           tsu = event.trajectory_state_update
           is_subagent = (
-              self._cascade_id and tsu.trajectory_id != self._cascade_id
+              self._main_trajectory_id
+              and tsu.trajectory_id != self._main_trajectory_id
           )
 
           if (
@@ -1059,6 +1092,7 @@ class LocalConnection(connection.Connection):
               self._active_subagent_ids.discard(tsu.trajectory_id)
               if self._hook_runner:
                 op_ctx = hooks.OperationContext(self._get_turn_context())
+                op_ctx.set_state("trajectory_id", tsu.trajectory_id)
                 response = self._subagent_responses.pop(tsu.trajectory_id, "")
                 result = types.ToolResult(
                     name=types.BuiltinTools.START_SUBAGENT.value,

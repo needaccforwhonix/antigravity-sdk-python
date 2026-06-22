@@ -152,6 +152,9 @@ class Agent:
         exc_type: The exception type, if any.
         exc_val: The exception value, if any.
         exc_tb: The traceback, if any.
+
+    Returns:
+        True if the exception was suppressed, False or None otherwise.
     """
     logging.info("Stopping Agent session")
     return await self._exit_stack.__aexit__(exc_type, exc_val, exc_tb)

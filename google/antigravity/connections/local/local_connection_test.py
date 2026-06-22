@@ -1161,7 +1161,7 @@ class LocalConnectionTest(unittest.IsolatedAsyncioTestCase):
     It also verifies that wait_for_idle supports multiple concurrent callers.
     """
     harness = self._make_harness()
-    harness.conn._cascade_id = "parent_traj"
+    harness.conn._main_trajectory_id = "parent_traj"
     harness.conn._is_idle.clear()
     harness.conn._parent_idle = False
 
@@ -2848,7 +2848,7 @@ class LocalConnectionSubagentHookTest(unittest.IsolatedAsyncioTestCase):
     # Wait for it to be processed by draining queue
     await asyncio.wait_for(harness.conn._step_queue.get(), timeout=2.0)
 
-    self.assertEqual(harness.conn._cascade_id, "main_traj")
+    self.assertEqual(harness.conn._main_trajectory_id, "main_traj")
 
     # Simulate a subagent model step with text (may arrive as ACTIVE first).
     sub_active = localharness_pb2.OutputEvent(
