@@ -20,7 +20,7 @@ from typing import cast
 
 from google.antigravity import types
 from google.antigravity.connections import connection as connection_module
-from google.antigravity.conversation import conversation
+from google.antigravity.conversation import conversation as conversation_lib
 from google.antigravity.hooks import hook_runner
 from google.antigravity.hooks import policy
 from google.antigravity.tools import tool_context
@@ -119,7 +119,7 @@ class Agent:
 
       logging.info("Starting connection and creating conversation...")
       self._conversation = await self._exit_stack.enter_async_context(
-          conversation.Conversation.create(self._strategy)
+          conversation_lib.Conversation.create(self._strategy)
       )
 
       # Start triggers via TriggerRunner.
@@ -176,7 +176,7 @@ class Agent:
     return self._conversation is not None
 
   @property
-  def conversation(self) -> conversation.Conversation:
+  def conversation(self) -> conversation_lib.Conversation:
     """Returns the active Conversation session.
 
     Use this for advanced session introspection: history, turn count,
