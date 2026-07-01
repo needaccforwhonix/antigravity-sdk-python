@@ -15,6 +15,7 @@
 """Unit tests for LocalConnection."""
 
 import asyncio
+import base64
 import datetime
 import importlib
 import io
@@ -543,6 +544,97 @@ class LocalConnectionTest(unittest.IsolatedAsyncioTestCase):
     resp = sent_data["toolResponse"]
     self.assertEqual(resp["id"], "call_1")
     self.assertIn("Denied tool", resp["errorMessage"])
+
+  def test_extract_media_from_result(self):
+    img = types.Image(data=b"\xff\xd8\xff\xd9", mime_type="image/jpeg")
+
+    # A bare media value is fully extracted.
+    cleaned, media = local_connection._extract_media_from_result(img)
+    self.assertIsNone(cleaned)
+    self.assertEqual(media, [img])
+
+    # Media is pulled out of a mixed list, text is kept.
+    cleaned, media = local_connection._extract_media_from_result(
+        ["a", img, "b"]
+    )
+    self.assertEqual(cleaned, ["a", "b"])
+    self.assertEqual(media, [img])
+
+    # Non-media values pass through untouched.
+    cleaned, media = local_connection._extract_media_from_result({"k": "v"})
+    self.assertEqual(cleaned, {"k": "v"})
+    self.assertEqual(media, [])
+
+    # Media nested in a dict is extracted; remaining keys are kept.
+    cleaned, media = local_connection._extract_media_from_result(
+        {"caption": "hi", "img": img}
+    )
+    self.assertEqual(cleaned, {"caption": "hi"})
+    self.assertEqual(media, [img])
+
+  async def test_tool_result_image_sent_as_supplemental_media(self):
+    def image_tool():
+      return [
+          "here is the snapshot",
+          types.Image(data=b"\xff\xd8\xff\xd9", mime_type="image/jpeg"),
+      ]
+
+    self.tool_runner.register(image_tool, name="image_tool")
+    harness = self._make_harness()
+
+    await harness.send_event(
+        localharness_pb2.OutputEvent(
+            tool_call=localharness_pb2.ToolCall(
+                id="call_img", name="image_tool", arguments_json="{}"
+            )
+        )
+    )
+
+    sent_data = await harness.wait_for_response()
+    resp = sent_data["toolResponse"]
+    self.assertEqual(resp["id"], "call_img")
+    # The text part stays in response_json; the image becomes supplemental media.
+    self.assertIn("here is the snapshot", resp["responseJson"])
+    self.assertIn("supplementalMedia", resp)
+    self.assertEqual(resp["supplementalMedia"][0]["mimeType"], "image/jpeg")
+    self.assertEqual(
+        base64.b64decode(resp["supplementalMedia"][0]["data"]),
+        b"\xff\xd8\xff\xd9",
+    )
+
+  async def test_tool_result_media_only_uses_placeholder_and_description(self):
+    def photo_tool():
+      # Returns ONLY media (no accompanying text), with a description.
+      return types.Image(
+          data=b"\xff\xd8\xff\xd9",
+          mime_type="image/jpeg",
+          description="a deck photo",
+      )
+
+    self.tool_runner.register(photo_tool, name="photo_tool")
+    harness = self._make_harness()
+
+    await harness.send_event(
+        localharness_pb2.OutputEvent(
+            tool_call=localharness_pb2.ToolCall(
+                id="call_photo", name="photo_tool", arguments_json="{}"
+            )
+        )
+    )
+
+    sent_data = await harness.wait_for_response()
+    resp = sent_data["toolResponse"]
+    self.assertEqual(resp["id"], "call_photo")
+    # A media-only result gets a placeholder text result, and the image is
+    # carried as supplemental media (with its description preserved).
+    self.assertIn("Returned 1 media attachment(s)", resp["responseJson"])
+    self.assertEqual(
+        resp["supplementalMedia"][0]["description"], "a deck photo"
+    )
+    self.assertEqual(
+        base64.b64decode(resp["supplementalMedia"][0]["data"]),
+        b"\xff\xd8\xff\xd9",
+    )
 
   async def test_tool_confirmation_request_integration(self):
     hr = hook_runner.HookRunner()

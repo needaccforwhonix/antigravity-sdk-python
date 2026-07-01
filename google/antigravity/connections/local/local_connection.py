@@ -1305,6 +1305,12 @@ class LocalConnection(connection.Connection):
   async def _send_tool_results(self, results: list[types.ToolResult]) -> None:
     """Sends tool execution results back to the harness.
 
+    Media objects (Image/Document/Audio/Video) returned by a tool are split out
+    of the structured ``response_json`` and attached as ``supplemental_media``
+    so the model actually sees them. This lets a custom tool return both a text
+    result and image bytes from a single call (e.g. "read this snapshot")
+    instead of relying on a follow-up user turn.
+
     Args:
       results: ToolResult instances. The id field is used to correlate each
         result with the original ToolCall.
@@ -1322,9 +1328,27 @@ class LocalConnection(connection.Connection):
             error_message=result.error,
         )
       else:
+        # Split any media out of the result so it reaches the model as
+        # supplemental media instead of opaque base64 in response_json.
+        cleaned_value, media = _extract_media_from_result(result.result)
+        if media and cleaned_value is None:
+          cleaned_value = f"Returned {len(media)} media attachment(s)."
+        result_for_json = (
+            result.model_copy(update={"result": cleaned_value})
+            if media
+            else result
+        )
         response = localharness_pb2.ToolResponse(
             id=result.id,
-            response_json=json.dumps(self._tool_result_to_dict(result)),
+            response_json=json.dumps(self._tool_result_to_dict(result_for_json)),
+            supplemental_media=[
+                localharness_pb2.Media(
+                    mime_type=item.mime_type,
+                    description=item.description or "",
+                    data=item.data,
+                )
+                for item in media
+            ],
         )
       input_event = localharness_pb2.InputEvent(tool_response=response)
       await self._ws.send(json_format.MessageToJson(input_event))
@@ -1333,6 +1357,49 @@ class LocalConnection(connection.Connection):
     """Sends a trigger message to the agent."""
     event = localharness_pb2.InputEvent(automated_trigger=content)
     await self._ws.send(json_format.MessageToJson(event))
+
+
+# Tool-result values of these types are delivered to the model as supplemental
+# media rather than JSON-serialized into the text result.
+_MEDIA_TYPES = (types.Image, types.Document, types.Audio, types.Video)
+
+
+def _extract_media_from_result(value: Any) -> tuple[Any, list[Any]]:
+  """Splits media attachments out of a tool result value.
+
+  Recurses through lists and dicts, pulling out any Image/Document/Audio/Video
+  so they can be delivered to the model as supplemental media rather than being
+  JSON-serialized (which would just embed opaque base64 in the text result).
+
+  Args:
+    value: The tool's return value.
+
+  Returns:
+    A (cleaned_value, media) tuple: ``cleaned_value`` is ``value`` with the
+    media removed (None if it was entirely media), and ``media`` is the list of
+    extracted media objects in encounter order.
+  """
+  if isinstance(value, _MEDIA_TYPES):
+    return None, [value]
+  if isinstance(value, (list, tuple)):
+    cleaned_items: list[Any] = []
+    media: list[Any] = []
+    for item in value:
+      cleaned_item, item_media = _extract_media_from_result(item)
+      media.extend(item_media)
+      if cleaned_item is not None:
+        cleaned_items.append(cleaned_item)
+    return (cleaned_items or None), media
+  if isinstance(value, dict):
+    cleaned_dict: dict[Any, Any] = {}
+    dict_media: list[Any] = []
+    for key, item in value.items():
+      cleaned_item, item_media = _extract_media_from_result(item)
+      dict_media.extend(item_media)
+      if cleaned_item is not None:
+        cleaned_dict[key] = cleaned_item
+    return (cleaned_dict or None), dict_media
+  return value, []
 
 
 def _to_proto_input_content(
