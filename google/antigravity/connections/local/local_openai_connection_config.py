@@ -52,6 +52,7 @@ class LocalOpenAIAgentConfig(BaseLocalAgentConfig):
       hooks: list[hooks_mod.Hook] | None = None,
       triggers: list[triggers_mod.Trigger] | None = None,
       mcp_servers: list[types.McpServerConfig] | None = None,
+      subagents: list[types.SubagentConfig] | None = None,
       workspaces: list[str] | None = None,
       conversation_id: str | None = None,
       save_dir: str | None = None,
@@ -110,4 +111,6 @@ class LocalOpenAIAgentConfig(BaseLocalAgentConfig):
         workspaces=self.workspaces,
         app_data_dir=self.app_data_dir,
         skills_paths=self.skills_paths,
+        mcp_servers=self.mcp_servers,
+        subagents=self.subagents,
     )

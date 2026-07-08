@@ -169,6 +169,7 @@ class LocalAgentConfig(BaseLocalAgentConfig):
       hooks: list[hooks_mod.Hook] | None = None,
       triggers: list[triggers_mod.Trigger] | None = None,
       mcp_servers: list[types.McpServerConfig] | None = None,
+      subagents: list[types.SubagentConfig] | None = None,
       workspaces: list[str] | None = None,
       conversation_id: str | None = None,
       save_dir: str | None = None,
@@ -183,7 +184,6 @@ class LocalAgentConfig(BaseLocalAgentConfig):
       vertex: bool | None = None,
       project: str | None = None,
       location: str | None = None,
-      subagents: list[types.SubagentConfig] | None = None,
       **kwargs: Any,
   ):
 

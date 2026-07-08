@@ -683,6 +683,53 @@ class LiteRTConnectionTest(unittest.IsolatedAsyncioTestCase):
       self.assertNotIn("max_context_tokens", kwargs)
       self.assertEqual(kwargs["max_num_tokens"], 4096)
 
+  def test_litert_config_mcp_servers_and_subagents_passed_to_strategy(self):
+    """Verify LiteRTAgentConfig passes mcp_servers and subagents to strategy."""
+    mcp_server = types.McpStdioServer(
+        name="test_mcp", command="echo", args=["hello"]
+    )
+    subagent = types.SubagentConfig(
+        name="test_subagent",
+        description="A test subagent",
+        system_instructions="You are a subagent",
+    )
+    config = litert_connection_config.LiteRTAgentConfig(
+        model_path="/tmp/model.litertlm",
+        mcp_servers=[mcp_server],
+        subagents=[subagent],
+    )
+    strategy = config.create_strategy(
+        tool_runner=mock.MagicMock(),
+        hook_runner=mock.MagicMock(),
+    )
+    self.assertEqual(strategy._mcp_servers, [mcp_server])
+    self.assertEqual(strategy._subagents, [subagent])
+
+  def test_local_openai_config_mcp_servers_and_subagents_passed_to_strategy(
+      self,
+  ):
+    """Verify LocalOpenAIAgentConfig passes mcp_servers and subagents to strategy."""
+    mcp_server = types.McpStdioServer(
+        name="test_mcp", command="echo", args=["hello"]
+    )
+    subagent = types.SubagentConfig(
+        name="test_subagent",
+        description="A test subagent",
+        system_instructions="You are a subagent",
+    )
+    config = local_openai_connection_config.LocalOpenAIAgentConfig(
+        base_url="http://localhost:11434/v1",
+        model="llama3.1",
+        mcp_servers=[mcp_server],
+        subagents=[subagent],
+    )
+    strategy = config.create_strategy(
+        tool_runner=mock.MagicMock(),
+        hook_runner=mock.MagicMock(),
+    )
+    self.assertEqual(strategy._mcp_servers, [mcp_server])
+    self.assertEqual(strategy._subagents, [subagent])
+
 
 if __name__ == "__main__":
   unittest.main()
