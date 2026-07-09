@@ -498,8 +498,15 @@ class LocalHarnessEventProcessor:
           tsu.state
           == localharness_pb2.TrajectoryStateUpdate.State.STATE_RUNNING
       ):
+        # If any trajectory is running, the connection is not idle.
+        if self.is_idle.is_set():
+          self.is_idle.clear()
         if is_subagent:
           self.active_subagent_ids.add(tsu.trajectory_id)
+        else:
+          # Note: the main trajectory seems to switch from RUNNING -> IDLE ->
+          # RUNNING as it invokes subagents.
+          self.parent_idle = False
 
       elif tsu.state == localharness_pb2.TrajectoryStateUpdate.State.STATE_IDLE:
         if is_subagent:

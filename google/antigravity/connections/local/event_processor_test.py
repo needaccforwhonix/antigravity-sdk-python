@@ -14,11 +14,18 @@
 
 """Tests for event_processor that translates wire events to SDK events."""
 
+import unittest
+from unittest import mock
+
 from absl.testing import absltest
 
 from google.antigravity.connections.local import localharness_pb2
 from google.antigravity import types
 from google.antigravity.connections.local import event_processor
+
+
+MAIN_TRAJECTORY_ID = "cbb3a5135a32671ae8152a25a857c4bc"
+SUBAGENT_TRAJECTORY_ID = "9121f3e9937e263b74a4a43ff6fb0117"
 
 
 class EventProcessorHelperTest(absltest.TestCase):
@@ -255,6 +262,143 @@ class LocalConnectionStepFromDictTest(absltest.TestCase):
         step.tool_calls[0].canonical_path,
         "/cns/el-d/home/user/workspace/kittens.md",
     )
+
+
+class LocalHarnessEventProcessorTest(unittest.IsolatedAsyncioTestCase):
+  """Tests for LocalHarnessEventProcessor."""
+
+  async def test_main_agent_trajectory_step_update_resets_idle_state(self):
+    """Verifies that when a main agent transitions to RUNNING, idleness resets.
+
+    Why: The main agent can go in and out of the idle state as it waits on
+    subagents. When it exits the idle state to STATE_RUNNING, we should record
+    that so that the SDK does not terminate the agent process early.
+    """
+    processor = event_processor.LocalHarnessEventProcessor(
+        send_input_event_fn=mock.AsyncMock()
+    )
+    processor.main_trajectory_id = MAIN_TRAJECTORY_ID
+    processor.parent_idle = True
+    processor.is_idle.set()
+
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_RUNNING,
+            trajectory_id=MAIN_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+
+    self.assertFalse(processor.parent_idle)
+    self.assertFalse(processor.is_idle.is_set())
+
+  async def test_subagent_trajectory_step_update_resets_idle_state(self):
+    """Verifies that when a subagent transitions to RUNNING, idleness resets.
+
+    Why: A subagent transitioning to STATE_RUNNING should reset idleness, but
+    not the state of the parent.
+    """
+    processor = event_processor.LocalHarnessEventProcessor(
+        send_input_event_fn=mock.AsyncMock()
+    )
+    processor.main_trajectory_id = MAIN_TRAJECTORY_ID
+    processor.parent_idle = True
+    processor.is_idle.set()
+
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_RUNNING,
+            trajectory_id=SUBAGENT_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+
+    self.assertTrue(processor.parent_idle)  # The parent remains idle
+    self.assertFalse(processor.is_idle.is_set())
+    self.assertIn(SUBAGENT_TRAJECTORY_ID, processor.active_subagent_ids)
+
+  async def test_trajectory_remains_active_if_any_agent_is_running(self):
+    """Verifies that when any agent is RUNNING, the trajectory is not idle.
+
+    Why: As agents transistion from IDLE to RUNNING, the trajectory should be
+    considered active.
+    """
+
+    processor = event_processor.LocalHarnessEventProcessor(
+        send_input_event_fn=mock.AsyncMock()
+    )
+    processor.main_trajectory_id = MAIN_TRAJECTORY_ID
+
+    # 1) Main agent starts, assert trajectory is active
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_RUNNING,
+            trajectory_id=MAIN_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+    self.assertFalse(processor.parent_idle)
+    self.assertFalse(processor.is_idle.is_set())
+
+    # 2) Subagent starts, assert trajectory is still active
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_RUNNING,
+            trajectory_id=SUBAGENT_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+    self.assertFalse(processor.parent_idle)
+    self.assertFalse(processor.is_idle.is_set())
+    self.assertIn(SUBAGENT_TRAJECTORY_ID, processor.active_subagent_ids)
+
+    # 3) Main agent goes idle, assert trajectory is still active
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_IDLE,
+            trajectory_id=MAIN_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+    self.assertTrue(processor.parent_idle)
+    self.assertFalse(processor.is_idle.is_set())
+    self.assertIn(SUBAGENT_TRAJECTORY_ID, processor.active_subagent_ids)
+
+    # 4) Main agent starts again, assert trajectory is still active
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_RUNNING,
+            trajectory_id=MAIN_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+    self.assertFalse(processor.parent_idle)
+    self.assertFalse(processor.is_idle.is_set())
+    self.assertIn(SUBAGENT_TRAJECTORY_ID, processor.active_subagent_ids)
+
+    # 5) Subagent goes idle, assert trajectory is still active
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_IDLE,
+            trajectory_id=SUBAGENT_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+    self.assertFalse(processor.parent_idle)
+    self.assertFalse(processor.is_idle.is_set())
+    self.assertNotIn(SUBAGENT_TRAJECTORY_ID, processor.active_subagent_ids)
+
+    # 6) Main agent goes idle, assert trajectory is now idle
+    # (since all agents are idle)
+    event = localharness_pb2.OutputEvent(
+        trajectory_state_update=localharness_pb2.TrajectoryStateUpdate(
+            state=localharness_pb2.TrajectoryStateUpdate.State.STATE_IDLE,
+            trajectory_id=MAIN_TRAJECTORY_ID,
+        )
+    )
+    await processor.process_event(event)
+    self.assertTrue(processor.parent_idle)
+    self.assertTrue(processor.is_idle.is_set())
 
 
 if __name__ == "__main__":
