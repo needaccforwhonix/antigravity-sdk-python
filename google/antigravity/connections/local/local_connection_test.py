@@ -21,6 +21,7 @@ import importlib
 import io
 import os
 import pathlib
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -32,11 +33,11 @@ import pydantic
 import websockets
 
 from google.antigravity.connections.local import localharness_pb2
+from google.antigravity.connections.local import localharness_pb2
 from google.antigravity import types
 from google.antigravity.connections.local import event_processor
 from google.antigravity.connections.local import local_connection
 from google.antigravity.connections.local import local_connection_config
-from google.antigravity.connections.local import localharness_pb2
 from google.antigravity.connections.local import test_utils
 from google.antigravity.hooks import hook_runner
 from google.antigravity.hooks import hooks as hooks_base
@@ -2001,6 +2002,74 @@ class LocalConnectionStrategyApiKeyTest(unittest.IsolatedAsyncioTestCase):
     with self.assertRaises(RuntimeError):
       async with strategy:
         pass
+
+
+class LocalConnectionStrategyConnectTest(unittest.IsolatedAsyncioTestCase):
+  """Tests for WebSocket connection fallback in LocalConnectionStrategy."""
+
+  def setUp(self):
+    super().setUp()
+    self.patcher = mock.patch(
+        "google.antigravity.connections.local.local_connection._get_default_binary_path",
+        return_value="/fake/binary",
+    )
+    self.patcher.start()
+    self.addCleanup(self.patcher.stop)
+
+  def _make_strategy(self, **kwargs):
+    return local_connection.LocalConnectionStrategy(**kwargs)
+
+  @mock.patch("websockets.connect", new_callable=mock.AsyncMock)
+  @mock.patch("subprocess.Popen")
+  async def test_connect_falls_back_to_127_0_0_1_on_localhost_failure(
+      self, mock_popen, mock_connect
+  ):
+    """Verifies that if localhost fails, strategy attempts connecting via 127.0.0.1."""
+    output_config = localharness_pb2.OutputConfig(port=8080, api_key="fake-key")
+    serialized = output_config.SerializeToString()
+    length_bytes = struct.pack("<I", len(serialized))
+
+    mock_proc = mock.MagicMock()
+    mock_proc.stdin = mock.MagicMock()
+    mock_proc.stdout = mock.MagicMock()
+    mock_proc.stderr = io.BytesIO(b"")
+    mock_proc.stdout.read.side_effect = [length_bytes, serialized]
+    mock_popen.return_value = mock_proc
+
+    mock_ws = mock.MagicMock()
+    mock_ws.send = mock.AsyncMock()
+    mock_ws.recv = mock.AsyncMock(return_value="{}")
+    mock_ws.close = mock.AsyncMock()
+    mock_ws.__aiter__.return_value = []
+
+    mock_connect.side_effect = [
+        OSError("localhost resolution failed"),
+        mock_ws,
+    ]
+
+    models = [
+        types.ModelTarget(
+            name="gemini-3.5-flash",
+            types=[types.ModelType.TEXT],
+            endpoint=types.GeminiAPIEndpoint(api_key="explicit-key"),
+        )
+    ]
+    strategy = self._make_strategy(models=models)
+
+    async with strategy:
+      pass
+
+    self.assertEqual(mock_connect.call_count, 2)
+    mock_connect.assert_has_calls([
+        mock.call(
+            "ws://localhost:8080/",
+            additional_headers={"x-goog-api-key": "fake-key"},
+        ),
+        mock.call(
+            "ws://127.0.0.1:8080/",
+            additional_headers={"x-goog-api-key": "fake-key"},
+        ),
+    ])
 
 
 _get_default_binary_path = local_connection._get_default_binary_path
@@ -4158,8 +4227,6 @@ class LocalConnectionSubagentsTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(config.subagents, [])
     self.assertIsInstance(config.capabilities, types.CapabilitiesConfig)
     self.assertIsNone(config.conversation_id)
-
-
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ CLOSE_SENTINEL = event_processor.CLOSE_SENTINEL
 # shutdown cleanly. So we give it ample time. This constant is needed to make
 # tests fast.
 _PROCESS_WAIT_TIMEOUT_SECONDS = 3 * 60
+_MAX_WEBSOCKET_CONNECT_RETRIES = 5
 
 
 def to_proto_model_type(
@@ -968,6 +969,32 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
             f"Model '{m.name}' must have an endpoint configured."
         )
 
+  async def _connect_websocket(
+      self, port: int, api_key: str, process: subprocess.Popen[bytes]
+  ) -> tuple[Any, str]:
+    """Attempts to connect to the local harness WebSocket with backoff."""
+    for attempt in range(_MAX_WEBSOCKET_CONNECT_RETRIES):
+      for host in ("localhost", "127.0.0.1"):
+        ws_url = f"ws://{host}:{port}/"
+        try:
+          ws = await websockets.connect(
+              ws_url,
+              additional_headers={"x-goog-api-key": api_key},
+          )
+          return ws, ws_url
+        except (OSError, websockets.WebSocketException) as e:
+          last_exception = e
+      await asyncio.sleep(0.1 * (2**attempt))
+
+    process.kill()
+    stderr = ""
+    if process.stderr is not None:
+      stderr = process.stderr.read().decode("utf-8")
+    raise RuntimeError(
+        f"Failed to connect to WebSocket at {ws_url} after"
+        f" {_MAX_WEBSOCKET_CONNECT_RETRIES} attempts. Stderr: {stderr}"
+    ) from last_exception
+
   async def __aenter__(self) -> None:
     """Starts the backend."""
     self._validate_connection()
@@ -1014,30 +1041,14 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
     length = struct.unpack("<I", raw_len)[0]
     output_config = localharness_pb2.OutputConfig()
     output_config.ParseFromString(process.stdout.read(length))
-    ws_url = f"ws://localhost:{output_config.port}/"
-
     # Retry the WebSocket connection with backoff. The harness process may
-    # need a moment to start listening after writing its OutputConfig.
-    max_retries = 5
-    ws = None
-    for attempt in range(max_retries):
-      try:
-        ws = await websockets.connect(
-            ws_url,
-            additional_headers={"x-goog-api-key": output_config.api_key},
-        )
-        break
-      except (OSError, websockets.WebSocketException) as e:
-        if attempt == max_retries - 1:
-          process.kill()
-          stderr_output = process.stderr.read().decode("utf-8")
-          raise RuntimeError(
-              f"Failed to connect to WebSocket at {ws_url} after"
-              f" {max_retries} attempts. Stderr: {stderr_output}"
-          ) from e
-        await asyncio.sleep(0.1 * (2**attempt))
+    # need a moment to start listening after writing its OutputConfig. We try
+    # localhost first and fall back to 127.0.0.1, as some environments may not
+    # resolve localhost.
+    ws, ws_url = await self._connect_websocket(
+        output_config.port, output_config.api_key, process
+    )
 
-    assert ws is not None
     try:
       init_event = localharness_pb2.InitializeConversationEvent(
           config=harness_config
@@ -1061,8 +1072,8 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
       process.kill()
       stderr_output = process.stderr.read().decode("utf-8")
       raise RuntimeError(
-          f"Failed to initialize conversation at {ws_url}."
-          f" Stderr: {stderr_output}"
+          f"Failed to initialize conversation at {ws_url}. Stderr:"
+          f" {stderr_output}"
       ) from e
     self._connection = LocalConnection(
         process=process,
