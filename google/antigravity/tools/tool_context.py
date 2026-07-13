@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Conversation-aware context for custom tools.
+r"""Conversation-aware context for custom tools.
 
 ToolContext is the Layer 2 counterpart to TriggerContext. It wraps a
 Conversation and exposes conversation capabilities — identity and a
@@ -34,12 +34,11 @@ Example::
         return f"Searching for {query}..."
 """
 
-from typing import Any
-
 from google.antigravity.conversation import conversation as conversation_module
+from google.antigravity.utils import state as state_module
 
 
-class ToolContext:
+class ToolContext(state_module.StateStore):
   """Conversation-aware context injected into tools that request it.
 
   Modeled after ``TriggerContext``, this handle wraps a ``Conversation``
@@ -48,6 +47,8 @@ class ToolContext:
 
   Per-conversation state (``get_state`` / ``set_state``) persists for
   the lifetime of the ``ToolContext`` instance (i.e., the session).
+  State access methods (``get_state``, ``set_state``, ``update_state``)
+  are thread-safe and protected by a reentrant lock (``threading.RLock``).
   """
 
   def __init__(
@@ -59,31 +60,15 @@ class ToolContext:
     Args:
       conversation: The active conversation session.
     """
+    super().__init__(parent=None)
     self._conversation = conversation
-    self._state: dict[str, Any] = {}
 
   @property
   def conversation_id(self) -> str:
     """Returns the conversation identifier."""
     return self._conversation.conversation_id
 
-  def get_state(self, key: str, default: Any = None) -> Any:
-    """Retrieves a value from the per-conversation state store.
-
-    Args:
-      key: The state key.
-      default: Value returned when the key is absent.
-
-    Returns:
-      The stored value, or ``default`` if the key is not found.
-    """
-    return self._state.get(key, default)
-
-  def set_state(self, key: str, value: Any) -> None:
-    """Stores a value in the per-conversation state store.
-
-    Args:
-      key: The state key.
-      value: The value to store.
-    """
-    self._state[key] = value
+  def __enter__(self) -> "ToolContext":
+    """Acquires the context lock for use in a `with` statement."""
+    super().__enter__()
+    return self

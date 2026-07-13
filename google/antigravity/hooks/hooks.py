@@ -20,48 +20,23 @@ returned by their lifecycle callbacks.
 from __future__ import annotations
 
 import abc
-from typing import Any, Awaitable, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from google.antigravity import types
 from google.antigravity.types import AskQuestionInteractionSpec
 from google.antigravity.types import HookResult
 from google.antigravity.types import QuestionHookResult
+from google.antigravity.utils import state as state_module
 
 
 # --- Contexts ---
 
 
-class HookContext:
+class HookContext(state_module.StateStore):
   """Base context for hooks to share state."""
 
-  def __init__(self, parent: "HookContext | None" = None):
-    self.parent = parent
-    self._store: dict[str, Any] = {}
-
-  def get_state(self, key: str, default: Any = None) -> Any:
-    """Gets a value from the context or its parents.
-
-    Args:
-      key: The key to look up.
-      default: The default value to return if the key is not found.
-
-    Returns:
-      The value associated with the key, or the default value.
-    """
-    if key in self._store:
-      return self._store[key]
-    if self.parent:
-      return self.parent.get_state(key, default)
-    return default
-
-  def set_state(self, key: str, value: Any) -> None:
-    """Sets a value in the local context.
-
-    Args:
-      key: The key to set.
-      value: The value to associate with the key.
-    """
-    self._store[key] = value
+  def __init__(self, parent: HookContext | None = None):
+    super().__init__(parent=parent)
 
 
 class SessionContext(HookContext):
@@ -246,7 +221,7 @@ class OnCompactionHook(InspectHook):
 # --- Decorator Factory ---
 
 
-def _make_hook_decorator(hook_cls: type, *, pass_data: bool = True):
+def _make_hook_decorator(hook_cls: type[Any], *, pass_data: bool = True):
   """Creates a decorator that wraps an async function as a Hook subclass.
 
   Each decorator-created hook delegates its ``run()`` to the wrapped
