@@ -270,6 +270,9 @@ The SDK follows a three-layer architecture:
 | **Layer 2** — Session | Stateful session with history and convenience methods | `Conversation`, `ChatResponse`, `Step`, `ToolCall`, `AgentConfig`, `HookRunner`, `ToolRunner`, `TriggerRunner` |
 | **Layer 3** — Adapter | Transport and backend abstraction | `Connection`, `ConnectionStrategy`, `LocalConnection` |
 
+![SDK Dependencies](docs/sdk_dependencies.svg)
+![Swarm RAG Telemetry](docs/swarm_rag_telemetry.svg)
+
 ## Component Documentation
 
 For more detailed documentation on specific components, see:

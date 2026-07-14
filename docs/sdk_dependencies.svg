@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="100%" height="100%">
+  <defs>
+    <style>
+      .node { cursor: pointer; transition: transform 0.3s ease; }
+      .node:hover { transform: scale(1.05); }
+      .text-title { font-family: 'Inter', system-ui, sans-serif; font-weight: bold; fill: #F3F4F6; }
+      .text-desc { font-family: 'Inter', system-ui, sans-serif; fill: #9CA3AF; font-size: 14px; }
+      .dep-box { fill: #1E293B; stroke: #475569; stroke-width: 2; rx: 8; }
+      .link-line { stroke: #64748B; stroke-width: 2; stroke-dasharray: 6 4; animation: flow 8s linear infinite; }
+      @keyframes flow {
+        to { stroke-dashoffset: -80; }
+      }
+      .marker-dot { fill: #60A5FA; animation: ping 1.5s infinite; }
+      @keyframes ping {
+        0% { r: 5; opacity: 1; }
+        100% { r: 15; opacity: 0; }
+      }
+    </style>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#0F172A" rx="16" />
+
+  <!-- Title -->
+  <text x="40" y="50" class="text-title" font-size="24">Interactive SDK External Dependency Map</text>
+  <text x="40" y="80" class="text-desc">Click on any dependency node to inspect its integration role in ADK 2.0</text>
+
+  <!-- Flow Lines -->
+  <line x1="180" y1="260" x2="350" y2="180" class="link-line" />
+  <line x1="180" y1="260" x2="350" y2="260" class="link-line" />
+  <line x1="180" y1="260" x2="350" y2="340" class="link-line" />
+  <line x1="480" y1="180" x2="650" y2="260" class="link-line" />
+  <line x1="480" y1="260" x2="650" y2="260" class="link-line" />
+  <line x1="480" y1="340" x2="650" y2="260" class="link-line" />
+
+  <!-- Node 1: Core Client -->
+  <g class="node" id="node-core" onclick="showInfo('core')">
+    <rect x="50" y="210" width="130" height="100" class="dep-box" stroke="#3B82F6" />
+    <circle cx="115" cy="245" r="7" fill="#3B82F6" />
+    <circle cx="115" cy="245" r="7" fill="#3B82F6" class="marker-dot" />
+    <text x="115" y="280" font-family="Inter" font-weight="bold" fill="#3B82F6" font-size="14" text-anchor="middle">Antigravity SDK</text>
+  </g>
+
+  <!-- Node 2: wazero (Go) -->
+  <g class="node" id="node-wazero" onclick="showInfo('wazero')">
+    <rect x="350" y="130" width="130" height="80" class="dep-box" stroke="#10B981" />
+    <text x="415" y="175" font-family="Inter" font-weight="bold" fill="#10B981" font-size="13" text-anchor="middle">wazero (Go)</text>
+  </g>
+
+  <!-- Node 3: NATS Event Bus -->
+  <g class="node" id="node-nats" onclick="showInfo('nats')">
+    <rect x="350" y="220" width="130" height="80" class="dep-box" stroke="#EC4899" />
+    <text x="415" y="265" font-family="Inter" font-weight="bold" fill="#EC4899" font-size="13" text-anchor="middle">NATS Protocol</text>
+  </g>
+
+  <!-- Node 4: PyArrow (Python) -->
+  <g class="node" id="node-pyarrow" onclick="showInfo('pyarrow')">
+    <rect x="350" y="310" width="130" height="80" class="dep-box" stroke="#F59E0B" />
+    <text x="415" y="355" font-family="Inter" font-weight="bold" fill="#F59E0B" font-size="13" text-anchor="middle">PyArrow Stream</text>
+  </g>
+
+  <!-- Node 5: Target Graph RAG -->
+  <g class="node" id="node-graph" onclick="showInfo('graph')">
+    <rect x="650" y="220" width="130" height="100" class="dep-box" stroke="#8B5CF6" />
+    <text x="715" y="265" font-family="Inter" font-weight="bold" fill="#8B5CF6" font-size="14" text-anchor="middle">GraphRAG Space</text>
+    <text x="715" y="285" font-family="Inter" fill="#6B7280" font-size="12" text-anchor="middle">Memgraph/Neo4j</text>
+  </g>
+
+  <!-- Info Display Panel -->
+  <rect x="40" y="410" width="720" height="70" fill="#0F172A" stroke="#334155" stroke-width="1" rx="8" />
+  <text x="60" y="435" id="info-title" font-family="Inter" font-weight="bold" fill="#F8FAFC" font-size="15">Dependency Info</text>
+  <text x="60" y="458" id="info-desc" font-family="Inter" fill="#94A3B8" font-size="13">Select a dependency node to check integration details.</text>
+
+  <script type="text/javascript">
+    <![CDATA[
+    var details = {
+      core: {
+        title: "Antigravity SDK Core Layer",
+        desc: "Exposes function schemas and intercepts execution trajectories dynamically."
+      },
+      wazero: {
+        title: "wazero WASM Compiler Runtime",
+        desc: "Runs WebAssembly binaries locally in-process without CGO requirements."
+      },
+      nats: {
+        title: "NATS Swarm Event Broker",
+        desc: "Subscribes and publishes state frames to synchronize peer-to-peer agent nodes."
+      },
+      pyarrow: {
+        title: "PyArrow Tabular Memory Serialization",
+        desc: "Streams large log and memory dumps with zero-copy overhead to the graph parser."
+      },
+      graph: {
+        title: "GraphRAG & Vector Storage Nodes",
+        desc: "Hosts Memgraph, Neo4j, and Weavinate database entities mapping cognitive connections."
+      }
+    };
+
+    function showInfo(nodeId) {
+      var data = details[nodeId];
+      if (data) {
+        document.getElementById('info-title').textContent = data.title;
+        document.getElementById('info-desc').textContent = data.desc;
+      }
+    }
+    ]]>
+  </script>
+</svg>

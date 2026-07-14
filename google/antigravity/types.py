@@ -23,13 +23,28 @@ from __future__ import annotations
 import asyncio
 import enum
 import mimetypes
+from typing import Annotated, Any, AsyncIterator, Callable, Literal, cast, Sequence
 import pathlib
-from typing import Annotated, Any, AsyncIterator, Callable, Literal
-
 import pydantic
 
+from google.antigravity.models import GeminiAPIEndpoint
+from google.antigravity.models import GeminiModelOptions
+from google.antigravity.models import ModelEndpoint
+from google.antigravity.models import ModelTarget
+from google.antigravity.models import ModelType
+from google.antigravity.models import ThinkingLevel
+from google.antigravity.models import VertexEndpoint
+
 __all__ = [
+    "GeminiAPIEndpoint",
+    "GeminiModelOptions",
+    "ModelEndpoint",
+    "ModelTarget",
+    "ModelType",
+    "VertexEndpoint",
     "ThinkingLevel",
+    "SubagentConfig",
+    "SubagentCapabilities",
     "GenerationConfig",
     "ModelEntry",
     "ModelConfig",
@@ -60,6 +75,8 @@ __all__ = [
     "AskQuestionEntry",
     "AskQuestionInteractionSpec",
     "AntigravityConnectionError",
+    "AntigravityCancelledError",
+    "AntigravityExecutionError",
     "AntigravityValidationError",
     "TriggerDelivery",
     "FileChangeKind",
@@ -68,6 +85,8 @@ __all__ = [
     "Thought",
     "Text",
     "ChatResponse",
+    "BuiltinSlashCommandName",
+    "SlashCommand",
 ]
 
 # =============================================================================
@@ -237,6 +256,8 @@ class BuiltinTools(str, enum.Enum):
   START_SUBAGENT = "start_subagent"
   GENERATE_IMAGE = "generate_image"
   FINISH = "finish"
+  SEARCH_WEB = "search_web"
+  READ_URL_CONTENT = "read_url_content"
 
   @classmethod
   def read_only(cls) -> list["BuiltinTools"]:
@@ -251,6 +272,8 @@ class BuiltinTools(str, enum.Enum):
         cls.FIND_FILE,
         cls.VIEW_FILE,
         cls.FINISH,
+        cls.SEARCH_WEB,
+        cls.READ_URL_CONTENT,
     ]
 
   @classmethod
@@ -271,6 +294,8 @@ class BuiltinTools(str, enum.Enum):
         cls.START_SUBAGENT,
         cls.GENERATE_IMAGE,
         cls.FINISH,
+        cls.SEARCH_WEB,
+        cls.READ_URL_CONTENT,
     ]
 
   @classmethod
@@ -669,6 +694,22 @@ class AntigravityConnectionError(Exception):
   """
 
 
+class AntigravityCancelledError(asyncio.CancelledError):
+  """Raised when an active turn is cancelled programmatically."""
+
+  def __init__(self, message: str = "The request was cancelled by the client."):
+    """Initializes the cancellation error with a default message."""
+    super().__init__(message)
+
+
+class AntigravityExecutionError(Exception):
+  """Raised when the agent execution encounters a terminal error.
+
+  This indicates that the agent loop has terminated due to a fatal error
+  (e.g. model call failure, system constraint violation) and cannot continue.
+  """
+
+
 class AntigravityValidationError(Exception):
   """Wraps Pydantic ValidationError at the SDK boundary.
 
@@ -956,6 +997,10 @@ def _read_file_safely(path: str | pathlib.Path) -> bytes:
       OSError: For other filesystem errors.
   """
   file_path = pathlib.Path(path)
+  if file_path.is_dir():
+    raise IsADirectoryError(
+        f"Path is a directory, not a file: '{file_path}'"
+    )
   try:
     return file_path.read_bytes()
   except FileNotFoundError as exc:
@@ -1052,8 +1097,31 @@ class Video(_BaseMedia):
     return v
 
 
-ContentPrimitive = str | Image | Document | Audio | Video
-Content = ContentPrimitive | list[ContentPrimitive]
+class BuiltinSlashCommandName(str, enum.Enum):
+  """Supported system slash commands.
+
+  Attributes:
+    PLAN: Plan carefully before executing a task (generates an implementation
+      plan artifact and awaits user approval).
+  """
+
+  PLAN = "plan"
+
+
+class SlashCommand(pydantic.BaseModel):
+  """Slash command context primitive.
+
+  Attributes:
+    name: The strict BuiltinSlashCommandName enum.
+  """
+
+  model_config = pydantic.ConfigDict(frozen=True)
+
+  name: BuiltinSlashCommandName
+
+
+ContentPrimitive = str | Image | Document | Audio | Video | SlashCommand
+Content = ContentPrimitive | Sequence[ContentPrimitive]
 
 # Registry mapping each supported MIME type to its media class.
 # Built once at import time from the per-category frozensets.
@@ -1101,3 +1169,18 @@ def from_file(
         f"Supported file formats in the SDK are: {sorted(_MIME_TO_MEDIA_CLASS)}"
     )
   return media_cls(data=data, mime_type=mime_guess, description=description)  # pytype: disable=bad-return-type
+
+
+class SubagentCapabilities(pydantic.BaseModel):
+  """Capabilities config for a subagent."""
+  enabled_tools: Sequence[BuiltinTools | str] | None = None
+  disabled_tools: Sequence[BuiltinTools | str] | None = None
+
+
+class SubagentConfig(pydantic.BaseModel):
+  """Configuration for a static subagent."""
+  name: str
+  description: str = ""
+  system_instructions: str | SystemInstructions | None = None
+  capabilities: SubagentCapabilities | None = None
+  tools: Sequence[Callable[..., Any] | str] = pydantic.Field(default_factory=list)
