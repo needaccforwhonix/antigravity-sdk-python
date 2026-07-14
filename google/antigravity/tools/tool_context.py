@@ -15,9 +15,9 @@
 """Conversation-aware context for custom tools.
 
 ToolContext is the Layer 2 counterpart to TriggerContext. It wraps a
-Conversation and exposes conversation capabilities — identity and a
-per-conversation key-value store — to tools that opt in by declaring
-a ``ToolContext``-typed parameter.
+Connection and exposes conversation capabilities — identity, idle state,
+message injection, and a per-conversation key-value store — to tools that
+opt in by declaring a ``ToolContext``-typed parameter.
 
 Tools that do not declare a ``ToolContext`` parameter are unaffected.
 The ToolRunner handles detection at registration time and injection at
@@ -36,13 +36,13 @@ Example::
 
 from typing import Any
 
-from google.antigravity.conversation import conversation as conversation_module
+from google.antigravity.connections import connection as connection_module
 
 
 class ToolContext:
   """Conversation-aware context injected into tools that request it.
 
-  Modeled after ``TriggerContext``, this handle wraps a ``Conversation``
+  Modeled after ``TriggerContext``, this handle wraps a ``Connection``
   and provides a curated set of conversation capabilities. One
   ``ToolContext`` is created per session and shared across all tools.
 
@@ -52,20 +52,36 @@ class ToolContext:
 
   def __init__(
       self,
-      conversation: conversation_module.Conversation,
+      conn: connection_module.Connection,
   ) -> None:
     """Initializes the ToolContext.
 
     Args:
-      conversation: The active conversation session.
+      conn: The active connection to the agent backend.
     """
-    self._conversation = conversation
+    self._connection = conn
     self._state: dict[str, Any] = {}
 
   @property
   def conversation_id(self) -> str:
     """Returns the conversation identifier."""
-    return self._conversation.conversation_id
+    return self._connection.conversation_id
+
+  @property
+  def is_idle(self) -> bool:
+    """Returns True if the connection is idle."""
+    return self._connection.is_idle
+
+  async def send(self, message: str) -> None:
+    """Sends a message into the agent conversation.
+
+    This injects a trigger-style notification into the conversation,
+    allowing a tool to asynchronously push follow-up messages.
+
+    Args:
+      message: The message content to send.
+    """
+    await self._connection.send_trigger_notification(message)
 
   def get_state(self, key: str, default: Any = None) -> Any:
     """Retrieves a value from the per-conversation state store.

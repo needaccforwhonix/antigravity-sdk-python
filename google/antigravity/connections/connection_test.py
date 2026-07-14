@@ -16,8 +16,6 @@
 
 import unittest
 from google.antigravity.connections import connection
-from google.antigravity.hooks import hooks as hooks_mod
-from google.antigravity.hooks import policy
 
 
 class DummyConnection(connection.Connection):
@@ -44,9 +42,11 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(conn.conversation_id, "")
 
     await conn.cancel()
+    await conn.delete()
+    await conn.signal_idle()
     await conn.wait_for_idle()
     self.assertFalse(await conn.wait_for_wakeup())
-    await conn._send_tool_results([])
+    await conn.send_tool_results([])
 
 
 class AgentConfigTest(unittest.TestCase):
@@ -97,59 +97,6 @@ class AgentConfigTest(unittest.TestCase):
 
     with self.assertRaises(ValueError):
       ConcreteConfig(response_schema=42)
-
-  def test_policies_validation(self):
-    class ConcreteConfig(connection.AgentConfig):
-
-      def create_strategy(self, *, tool_runner, hook_runner):
-        return None
-
-    my_policy = policy.Policy(tool="test", decision=policy.Decision.APPROVE)
-
-    # Test policies=None (should default to empty list)
-    config_none = ConcreteConfig(policies=None)
-    self.assertEqual(config_none.policies, [])
-
-    # Test policies as a single object (should be wrapped in a list)
-    config_single = ConcreteConfig(policies=my_policy)
-    self.assertEqual(config_single.policies, [my_policy])
-
-    # Test policies as a nested list (should be flattened)
-    config_nested = ConcreteConfig(policies=[my_policy, [my_policy]])
-    self.assertEqual(config_nested.policies, [my_policy, my_policy])
-
-  def test_model_copy_deep_preserves_executable_references(self):
-    class ConcreteConfig(connection.AgentConfig):
-
-      def create_strategy(self, *, tool_runner, hook_runner):
-        return None
-
-    def my_tool():
-      pass
-
-    class DummyHook(hooks_mod.InspectHook):
-
-      async def run(self, context, data):
-        pass
-
-    my_hook = DummyHook()
-
-    async def my_trigger(_):
-      pass
-
-    my_policy = policy.Policy(tool="test", decision=policy.Decision.APPROVE)
-
-    config = ConcreteConfig(
-        tools=[my_tool],
-        hooks=[my_hook],
-        triggers=[my_trigger],
-        policies=[my_policy],
-    )
-    copied = config.model_copy(deep=True)
-    self.assertIs(copied.tools[0], my_tool)
-    self.assertIs(copied.hooks[0], my_hook)
-    self.assertIs(copied.triggers[0], my_trigger)
-    self.assertIs(copied.policies[0], my_policy)
 
 
 if __name__ == "__main__":

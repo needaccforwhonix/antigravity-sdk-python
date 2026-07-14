@@ -2,15 +2,7 @@
 # Run: pip-compile --allow-unsafe --generate-hashes requirements-release.in
 #      to regenerate requirements-release.txt.
 build
-tomli
 setuptools>=68.0
 twine
 wheel
-typing-extensions
 keyrings.google-artifactregistry-auth
-backports-tarfile
-importlib-metadata
-zipp
-
-
-

@@ -24,11 +24,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "${KOKORO_ARTIFACTS_DIR}/git/antigravity-sdk-py"
 
-# --- Python 3.10 via pyenv (pre-installed on the Kokoro image) ---
-echo "--- Setting up Python 3.10 ---"
+# --- Python 3.13 via pyenv (pre-installed on the Kokoro image) ---
+echo "--- Setting up Python 3.13 ---"
 eval "$(pyenv init -)"
-pyenv install -s 3.10
-pyenv global 3.10
+pyenv install -s 3.13
+pyenv global 3.13
 python3 --version
 
 echo "--- Installing build tools with hash verification ---"

@@ -12,18 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trigger system for the Google Antigravity SDK."""
-
-from google.antigravity.triggers.helpers import every
-from google.antigravity.triggers.helpers import on_file_change
-from google.antigravity.triggers.triggers import Trigger
-from google.antigravity.triggers.triggers import trigger
-from google.antigravity.triggers.triggers import TriggerContext
-
-__all__ = [
-    "every",
-    "on_file_change",
-    "Trigger",
-    "TriggerContext",
-    "trigger",
-]
+# Empty __init__.py for mcp package

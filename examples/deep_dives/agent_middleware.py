@@ -35,7 +35,7 @@ normal post-call flow.
 Criteria for correct script performance:
   1. The script exits cleanly with return code 0 (no unhandled exceptions).
   2. The AuditLogHook logs the send_notification call and its result.
-  3. The FallbackHook catches the error from send_to_unknown and
+  3. The FallbackHook catches the ValueError from send_to_unknown and
      guides the agent to recover by using lookup_user.
   4. The RateLimitHook denies a lookup_user call after the per-tool
      limit is exceeded.
@@ -48,9 +48,8 @@ import logging
 import time
 from typing import Any, Optional
 
-from google.antigravity import Agent
-from google.antigravity import LocalAgentConfig
 from google.antigravity import types
+from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import hooks
 
 # ---------------------------------------------------------------------------
@@ -186,7 +185,7 @@ class FallbackHook(hooks.OnToolErrorHook):
     print(f"  🔧 [Fallback] Caught {error_type}: {error_msg}")
 
     # Catch specific errors and guide the model toward resolution.
-    if "Could not resolve" in error_msg:
+    if isinstance(data, ValueError):
       return (
           "[Could not find that user. Use the lookup_user tool with "
           "their email address instead of their display name.]"

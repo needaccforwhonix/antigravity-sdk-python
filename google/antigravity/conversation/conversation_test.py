@@ -640,6 +640,20 @@ class ConversationLifecycleTest(unittest.IsolatedAsyncioTestCase):
     await conv.cancel()
     mock_connection.cancel.assert_called_once()
 
+  async def test_delete_delegates(self):
+    """Verifies delete delegates directly to connection."""
+    mock_connection = mock.AsyncMock(spec=connection.Connection)
+    conv = conversation.Conversation(mock_connection)
+    await conv.delete()
+    mock_connection.delete.assert_called_once()
+
+  async def test_signal_idle_delegates(self):
+    """Verifies signal_idle delegates directly to connection."""
+    mock_connection = mock.AsyncMock(spec=connection.Connection)
+    conv = conversation.Conversation(mock_connection)
+    await conv.signal_idle()
+    mock_connection.signal_idle.assert_called_once()
+
   async def test_wait_for_idle_delegates(self):
     """Verifies wait_for_idle delegates directly to connection."""
     mock_connection = mock.AsyncMock(spec=connection.Connection)
@@ -935,27 +949,6 @@ class ConversationUsageMetadataTest(unittest.IsolatedAsyncioTestCase):
     await result.resolve()
 
     self.assertIsNone(result.usage_metadata)
-
-  async def test_initialization_with_history_usage(self):
-    """Verifies that historical steps populate total_usage but NOT turn_usage."""
-    hist_step1 = self._make_step_with_usage(0, prompt=100, total=120)
-    hist_step2 = self._make_step_with_usage(1, prompt=200, total=240)
-
-    mock_connection = mock.MagicMock(spec=connection.Connection)
-    mock_connection._initial_history = [hist_step1, hist_step2]
-    mock_connection.wait_for_idle = mock.AsyncMock()
-    mock_connection.send = mock.AsyncMock()
-
-    conv = conversation.Conversation(
-        mock_connection, history=[hist_step1, hist_step2]
-    )
-
-    # Total cumulative usage must correctly sum the historical steps
-    self.assertEqual(conv.total_usage.prompt_token_count, 300)
-    self.assertEqual(conv.total_usage.total_token_count, 360)
-
-    # Turn usage must be completely clean (None)
-    self.assertIsNone(conv._last_turn_usage)
 
 
 class ConversationSendDrainTest(unittest.IsolatedAsyncioTestCase):

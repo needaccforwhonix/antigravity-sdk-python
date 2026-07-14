@@ -37,8 +37,7 @@ Criteria for correct script performance:
 import asyncio
 import tempfile
 
-from google.antigravity import Agent
-from google.antigravity import LocalAgentConfig
+from google.antigravity import Agent, LocalAgentConfig
 
 
 async def main() -> None:

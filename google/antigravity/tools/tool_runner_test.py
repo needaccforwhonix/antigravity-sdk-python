@@ -16,7 +16,6 @@
 
 import asyncio
 import threading
-from unittest import mock
 
 from absl.testing import absltest
 
@@ -210,17 +209,6 @@ class ToolRunnerTest(absltest.TestCase):
     runner = tool_runner.ToolRunner([tool])
     result = asyncio.run(runner.execute("_async_tool", x=3, y=4))
     self.assertEqual(result, 7)
-
-  def test_tool_with_schema_async_does_not_use_thread(self):
-    """Verifies that ToolWithSchema with async callable does not use to_thread."""
-    with mock.patch(
-        "asyncio.to_thread", wraps=asyncio.to_thread
-    ) as mock_to_thread:
-      tool = tool_runner.ToolWithSchema(_async_tool, {"type": "object"})
-      runner = tool_runner.ToolRunner([tool])
-      result = asyncio.run(runner.execute("_async_tool", x=3, y=4))
-      self.assertEqual(result, 7)
-      mock_to_thread.assert_not_called()
 
   def test_tools_property(self):
     """Verifies tools property returns a copy of the dictionary."""
@@ -466,6 +454,7 @@ class ContextInjectionTest(absltest.TestCase):
 
   def _make_mock_context(self):
     """Creates a mock ToolContext for testing."""
+    from unittest import mock  # pylint: disable=g-import-not-at-top
     from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
 
     ctx = mock.MagicMock(spec=tool_context.ToolContext)
@@ -529,26 +518,6 @@ class ContextInjectionTest(absltest.TestCase):
     runner.set_context(mock_ctx)
     result = asyncio.run(runner.execute("_async_context_tool", x=5))
     self.assertEqual(result, 10)
-    self.assertIs(received_ctx, mock_ctx)
-
-  def test_tool_with_pep604_union_context_receives_it(self):
-    """Verifies context injection works with PEP 604 union types (X | None)."""
-    from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
-
-    received_ctx = None
-
-    def _pep604_context_tool(
-        arg1: str, ctx: tool_context.ToolContext | None
-    ) -> str:
-      nonlocal received_ctx
-      received_ctx = ctx
-      return f"got {arg1}"
-
-    mock_ctx = self._make_mock_context()
-    runner = tool_runner.ToolRunner([_pep604_context_tool])
-    runner.set_context(mock_ctx)
-    result = asyncio.run(runner.execute("_pep604_context_tool", arg1="hello"))
-    self.assertEqual(result, "got hello")
     self.assertIs(received_ctx, mock_ctx)
 
   def test_no_context_set_skips_injection(self):
@@ -663,43 +632,6 @@ class ContextInjectionTest(absltest.TestCase):
     runner.unregister("_ctx_tool")
     self.assertNotIn("_ctx_tool", runner._context_params)
 
-  def test_tool_with_schema_and_context_receives_it(self):
-    from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
-    received_ctx = None
-
-    def _context_tool(arg1: str, ctx: tool_context.ToolContext) -> str:
-      nonlocal received_ctx
-      received_ctx = ctx
-      return f"got {arg1}"
-
-    tool = tool_runner.ToolWithSchema(_context_tool, {"type": "object"})
-    mock_ctx = self._make_mock_context()
-    runner = tool_runner.ToolRunner([tool])
-    runner.set_context(mock_ctx)
-    result = asyncio.run(runner.execute("_context_tool", arg1="hello"))
-    self.assertEqual(result, "got hello")
-    self.assertIs(received_ctx, mock_ctx)
-
-  def test_nested_tool_with_schema_and_context_receives_it(self):
-    from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
-    received_ctx = None
-
-    def _context_tool(arg1: str, ctx: tool_context.ToolContext) -> str:
-      nonlocal received_ctx
-      received_ctx = ctx
-      return f"got {arg1}"
-
-    tool = tool_runner.ToolWithSchema(
-        tool_runner.ToolWithSchema(_context_tool, {"type": "inner"}),
-        {"type": "outer"},
-    )
-    mock_ctx = self._make_mock_context()
-    runner = tool_runner.ToolRunner([tool])
-    runner.set_context(mock_ctx)
-    result = asyncio.run(runner.execute("_context_tool", arg1="hello"))
-    self.assertEqual(result, "got hello")
-    self.assertIs(received_ctx, mock_ctx)
-
 
 class SchemaGenerationTest(absltest.TestCase):
   """Validates get_public_callable schema generation.
@@ -749,65 +681,6 @@ class SchemaGenerationTest(absltest.TestCase):
     runner = tool_runner.ToolRunner()
     with self.assertRaises(KeyError):
       runner.get_public_callable("nonexistent")
-
-  def test_public_callable_preserves_tool_with_schema_wrapper(self):
-    import inspect  # pylint: disable=g-import-not-at-top
-    from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
-    def _schema_tool(query: str, ctx: tool_context.ToolContext) -> str:
-      del ctx
-      return query
-
-    schema = {"type": "object", "properties": {"query": {"type": "string"}}}
-    tool = tool_runner.ToolWithSchema(_schema_tool, schema)
-    runner = tool_runner.ToolRunner([tool])
-
-    public = runner.get_public_callable("_schema_tool")
-    self.assertIsInstance(public, tool_runner.ToolWithSchema)
-    self.assertEqual(public.input_schema, schema)
-    self.assertEqual(public.__name__, "_schema_tool")
-
-    # Verify signature of the inner callable is modified
-    sig = inspect.signature(public.fn)
-    self.assertIn("query", sig.parameters)
-    self.assertNotIn("ctx", sig.parameters)
-
-  def test_public_callable_handles_nested_tool_with_schema_wrappers(self):
-    import inspect  # pylint: disable=g-import-not-at-top
-    from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
-    def _schema_tool(query: str, ctx: tool_context.ToolContext) -> str:
-      del ctx
-      return query
-
-    inner_schema = {"type": "inner"}
-    outer_schema = {"type": "outer"}
-    tool = tool_runner.ToolWithSchema(
-        tool_runner.ToolWithSchema(_schema_tool, inner_schema),
-        outer_schema,
-    )
-    runner = tool_runner.ToolRunner([tool])
-
-    public = runner.get_public_callable("_schema_tool")
-    self.assertIsInstance(public, tool_runner.ToolWithSchema)
-    self.assertEqual(public.input_schema, outer_schema)
-
-    self.assertIsInstance(public.fn, tool_runner.ToolWithSchema)
-    self.assertEqual(public.fn.input_schema, inner_schema)
-
-    # Verify the innermost function has modified signature
-    sig = inspect.signature(public.fn.fn)
-    self.assertIn("query", sig.parameters)
-    self.assertNotIn("ctx", sig.parameters)
-
-  def test_public_callable_preserves_async_ness(self):
-    from google.antigravity.tools import tool_context  # pylint: disable=g-import-not-at-top
-
-    async def _schema_tool(query: str, ctx: tool_context.ToolContext) -> str:
-      del ctx
-      return query
-
-    runner = tool_runner.ToolRunner([_schema_tool])
-    public = runner.get_public_callable("_schema_tool")
-    self.assertTrue(tool_runner._is_async(public))
 
 
 if __name__ == "__main__":

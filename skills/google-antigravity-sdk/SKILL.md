@@ -25,11 +25,6 @@ ready:
     -   Explain that the API key can be passed explicitly in code as shorthand
         (e.g., `LocalAgentConfig(api_key="...")`) or automatically read from the
         environment.
-    -   For Gemini Enterprise Agent Platform (formerly Vertex AI)
-        authentication, the SDK uses Application Default Credentials (ADC).
-        Instruct the user to run `gcloud auth application-default login` and
-        configure the agent with `vertex=True` along with `project` and
-        `location` in `LocalAgentConfig`.
 
 ## Routing Table
 
@@ -83,8 +78,6 @@ relevant information.
 -   If the user needs to intercept agent lifecycle events (e.g., pre/post turn,
     tool execution, errors) to customize execution flow, read
     `examples/getting_started/hooks.md`.
--   If the user needs to implement turn-level cancellation or programmatic
-    stream aborts, read `examples/getting_started/cancellation.md`.
 -   If the user needs to implement persistent agents that remember past
     interactions across sessions, read
     `examples/getting_started/persistence.md`.
@@ -96,8 +89,3 @@ relevant information.
     `examples/getting_started/structured_output.md`.
 -   If the user needs to add, configure, or load agent skills into the Google
     Antigravity SDK agent, read `examples/getting_started/agent_skills.md`.
--   If the user needs to enable and use built-in web tools (like Google Search
-    or URL fetching) with the agent, read
-    `examples/getting_started/web_tools.md`. (Note: when fetching massive web
-    pages or articles, pair `read_url_content` with `view_file` to inspect
-    cached disk files).

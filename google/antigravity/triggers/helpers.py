@@ -22,17 +22,17 @@ import asyncio
 import pathlib
 from typing import Awaitable, Callable, Sequence
 
+from google.antigravity import types
 from google.antigravity.triggers import triggers as triggers_module
-
 
 # Mapping from watchfiles.Change enum int values to our FileChangeKind.
 # Values are hardcoded because watchfiles is lazily imported (only when
 # on_file_change is actually used). See: watchfiles.Change.added (1),
 # .modified (2), .deleted (3).
 _WATCHFILES_CHANGE_MAP = {
-    1: triggers_module.FileChangeKind.ADDED,
-    2: triggers_module.FileChangeKind.MODIFIED,
-    3: triggers_module.FileChangeKind.DELETED,
+    1: types.FileChangeKind.ADDED,
+    2: types.FileChangeKind.MODIFIED,
+    3: types.FileChangeKind.DELETED,
 }
 
 
@@ -75,7 +75,7 @@ def every(
 def on_file_change(
     path: str | pathlib.Path,
     callback: Callable[
-        [triggers_module.TriggerContext, Sequence[triggers_module.FileChange]],
+        [triggers_module.TriggerContext, Sequence[types.FileChange]],
         Awaitable[None],
     ],
 ) -> triggers_module.Trigger:
@@ -108,9 +108,9 @@ def on_file_change(
       ) from e
     async for raw_changes in watchfiles.awatch(watch_path):
       changes = [
-          triggers_module.FileChange(
+          types.FileChange(
               kind=_WATCHFILES_CHANGE_MAP.get(
-                  int(change_type), triggers_module.FileChangeKind.MODIFIED
+                  int(change_type), types.FileChangeKind.MODIFIED
               ),
               path=changed_path,
           )

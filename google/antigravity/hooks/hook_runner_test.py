@@ -165,21 +165,21 @@ class HookRunnerTest(unittest.IsolatedAsyncioTestCase):
 
   async def test_context_scoping(self):
     runner = hook_runner.HookRunner()
-    runner.session_context.set_state("session_key", "session_value")
+    runner.session_context.set("session_key", "session_value")
 
     turn_context = hooks.TurnContext(runner.session_context)
-    turn_context.set_state("turn_key", "turn_value")
+    turn_context.set("turn_key", "turn_value")
 
     op_context = hooks.OperationContext(turn_context)
-    op_context.set_state("op_key", "op_value")
+    op_context.set("op_key", "op_value")
 
-    self.assertEqual(op_context.get_state("op_key"), "op_value")
-    self.assertEqual(op_context.get_state("turn_key"), "turn_value")
-    self.assertEqual(op_context.get_state("session_key"), "session_value")
+    self.assertEqual(op_context.get("op_key"), "op_value")
+    self.assertEqual(op_context.get("turn_key"), "turn_value")
+    self.assertEqual(op_context.get("session_key"), "session_value")
 
     # Test that parent cannot access child data
-    self.assertIsNone(turn_context.get_state("op_key"))
-    self.assertIsNone(runner.session_context.get_state("turn_key"))
+    self.assertIsNone(turn_context.get("op_key"))
+    self.assertIsNone(runner.session_context.get("turn_key"))
 
   async def test_dispatch_on_tool_error_recovery(self):
 

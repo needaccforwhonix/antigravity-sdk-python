@@ -134,21 +134,6 @@ Hook behavior depends on the connection type.
 -   **Host-side (custom Python and MCP) tools**: The full hook pipeline runs
     (Decide → Execute → PostToolCall / OnToolError).
 
--   **Exception types in `OnToolErrorHook`**: When running against `LocalConnection`,
-    exceptions are delivered across the stream as `RuntimeError` instances containing
-    the error message string. Original exception subclasses (e.g. `ValueError`) are
-    not preserved across the harness boundary. Do not rely on `isinstance` checks
-    for specific exception subclasses.
-
--   **Shaping tool error messages**: When `OnToolErrorHook` fires (for both
-    built-in harness tools and custom tools), the hook can return a custom error
-    string. When a non-empty string is returned, it replaces the default error
-    message or stacktrace delivered to the model on its next turn. To customize
-    failure messages or provide recovery fallbacks for your tool, you can either
-    return a custom error string from this hook or do so directly within your
-    tool implementation (e.g., catching exceptions and returning fallback
-    outputs or raising descriptive exceptions).
-
 -   **Subagent hooks**: Subagent invocations appear as `START_SUBAGENT` tool
     calls. `PreToolCallDecideHook` fires before the subagent starts, and
     `PostToolCallHook` fires when the subagent trajectory goes idle, with the

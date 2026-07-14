@@ -21,45 +21,32 @@ types. They are pure Python Pydantic V2 models with no proto dependencies.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 import enum
 import mimetypes
 import pathlib
-from typing import Annotated, Any, AsyncIterator, Callable, Literal, TypeVar, cast
+from typing import Annotated, Any, AsyncIterator, Callable, Literal
 
 import pydantic
-from google.antigravity.models import GeminiAPIEndpoint
-from google.antigravity.models import GeminiModelOptions
-from google.antigravity.models import ModelEndpoint
-from google.antigravity.models import ModelTarget
-from google.antigravity.models import ModelType
-from google.antigravity.models import ThinkingLevel
-from google.antigravity.models import VertexEndpoint
-
-_BaseMediaT = TypeVar("_BaseMediaT", bound="_BaseMedia")
 
 __all__ = [
     "ThinkingLevel",
-    "ModelType",
-    "ModelEndpoint",
-    "GeminiAPIEndpoint",
-    "VertexEndpoint",
-    "GeminiModelOptions",
-    "ModelTarget",
+    "GenerationConfig",
+    "ModelEntry",
+    "ModelConfig",
+    "GeminiConfig",
     "SystemInstructionSection",
     "CustomSystemInstructions",
     "TemplatedSystemInstructions",
     "SystemInstructions",
-    "SubagentConfig",
-    "SubagentCapabilities",
     "BuiltinTools",
     "CapabilitiesConfig",
-    "BaseMcpServerConfig",
     "McpStdioServer",
+    "McpSseServer",
     "McpStreamableHttpServer",
     "McpServerConfig",
     "ToolCall",
     "ToolResult",
+    "PythonTool",
     "UsageMetadata",
     "StepType",
     "StepSource",
@@ -73,25 +60,111 @@ __all__ = [
     "AskQuestionEntry",
     "AskQuestionInteractionSpec",
     "AntigravityConnectionError",
-    "AntigravityCancelledError",
     "AntigravityValidationError",
-    "AntigravityExecutionError",
+    "TriggerDelivery",
+    "FileChangeKind",
+    "FileChange",
     "StreamChunk",
     "Thought",
     "Text",
     "ChatResponse",
-    "Image",
-    "Document",
-    "Audio",
-    "Video",
-    "Content",
-    "SlashCommand",
-    "BuiltinSlashCommandName",
 ]
 
 # =============================================================================
 # Config types
 # =============================================================================
+
+DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_IMAGE_GENERATION_MODEL = "gemini-3.1-flash-image-preview"
+
+
+class ThinkingLevel(str, enum.Enum):
+  """Thinking level for Gemini models that support extended thinking.
+
+  Controls the amount of reasoning the model performs before responding.
+  See https://ai.google.dev/gemini-api/docs/thinking#thinking-levels for
+  details.
+
+  Attributes:
+    MINIMAL: Minimal thinking.
+    LOW: Low thinking.
+    MEDIUM: Medium thinking.
+    HIGH: High thinking.
+  """
+
+  MINIMAL = "minimal"
+  LOW = "low"
+  MEDIUM = "medium"
+  HIGH = "high"
+
+
+class GenerationConfig(pydantic.BaseModel):
+  """Generation parameters for a model.
+
+  Attributes:
+    thinking_level: Thinking level for models that support extended thinking.
+      When None, the model's default level is used.
+  """
+
+  thinking_level: ThinkingLevel | None = None
+
+
+def _coerce_model_entry(v: "ModelEntry | str") -> "ModelEntry":
+  """Coerce a bare model name string into a ModelEntry."""
+  if isinstance(v, str):
+    return ModelEntry(name=v)
+  return v
+
+
+class ModelEntry(pydantic.BaseModel):
+  """A model with optional auth and generation overrides.
+
+  Attributes:
+    name: Model name (e.g. 'gemini-3.1-pro-preview').
+    api_key: Per-model API key override. Falls back to GeminiConfig.api_key.
+    generation: Generation parameters for this model.
+  """
+
+  name: str
+  api_key: str | None = None
+  generation: GenerationConfig = pydantic.Field(
+      default_factory=GenerationConfig
+  )
+
+
+class ModelConfig(pydantic.BaseModel):
+  """Model selection for each capability.
+
+  Slots accept a bare model name string (coerced to ModelEntry) or
+  a ModelEntry for per-model overrides. After validation, all slots
+  are always ModelEntry.
+
+  Attributes:
+    default: The primary reasoning model.
+    image_generation: The model used for image generation.
+  """
+
+  default: Annotated[
+      ModelEntry, pydantic.BeforeValidator(_coerce_model_entry)
+  ] = pydantic.Field(default_factory=lambda: ModelEntry(name=DEFAULT_MODEL))
+  image_generation: Annotated[
+      ModelEntry, pydantic.BeforeValidator(_coerce_model_entry)
+  ] = pydantic.Field(
+      default_factory=lambda: ModelEntry(name=DEFAULT_IMAGE_GENERATION_MODEL)
+  )
+
+
+class GeminiConfig(pydantic.BaseModel):
+  """Configuration for the Gemini model backend.
+
+  Attributes:
+    api_key: Shared API key for all models. Falls back to $GEMINI_API_KEY if not
+      set. Individual ModelEntry instances can override this.
+    models: Per-modality model selection and configuration.
+  """
+
+  api_key: str | None = None
+  models: ModelConfig = pydantic.Field(default_factory=ModelConfig)
 
 
 class SystemInstructionSection(pydantic.BaseModel):
@@ -136,51 +209,6 @@ class TemplatedSystemInstructions(pydantic.BaseModel):
 SystemInstructions = CustomSystemInstructions | TemplatedSystemInstructions
 
 
-class SubagentCapabilities(pydantic.BaseModel):
-  """Capabilities configuration for subagents.
-
-  Attributes:
-    enabled_tools: Explicit allowlist of builtin tools to enable. Mutually
-      exclusive with disabled_tools. When None, the harness defaults are used.
-    disabled_tools: Explicit denylist of builtin tools to disable. Mutually
-      exclusive with enabled_tools. When None, the harness defaults are used.
-  """
-
-  enabled_tools: list[BuiltinTools] | None = None
-  disabled_tools: list[BuiltinTools] | None = None
-
-  @pydantic.model_validator(mode="after")
-  def _check_mutually_exclusive(self) -> "SubagentCapabilities":
-    if self.enabled_tools is not None and self.disabled_tools is not None:
-      raise ValueError(
-          "enabled_tools and disabled_tools should be mutually exclusive."
-      )
-    return self
-
-
-class SubagentConfig(pydantic.BaseModel):
-  """Configuration for a static subagent.
-
-  Attributes:
-    name: Unique name of the subagent.
-    description: Description of the subagent.
-    system_instructions: Optional system instructions for the subagent. Note
-      that these will be appended to the subagent's default system instructions.
-    capabilities: Optional capabilities config controlling allowed tools. If
-      None, defaults to read-only tools.
-    tools: Optional list of additional custom tools (callable functions or
-      string names) to enable. Any custom Python tools used by subagents must
-      also be added to the main agent's tools list in order to be available to
-      the subagent during execution.
-  """
-
-  name: str
-  description: str
-  system_instructions: str | list[SystemInstructionSection] | None = None
-  capabilities: SubagentCapabilities | None = None
-  tools: list[Callable[..., Any] | str] = pydantic.Field(default_factory=list)
-
-
 class BuiltinTools(str, enum.Enum):
   """Identifiers for common connection-provided builtin tools.
 
@@ -195,8 +223,6 @@ class BuiltinTools(str, enum.Enum):
     ASK_QUESTION: Ask the user a clarifying question.
     START_SUBAGENT: Invoke a subagent.
     GENERATE_IMAGE: Generate or edit images.
-    SEARCH_WEB: Search the web.
-    READ_URL_CONTENT: Read content from a URL.
     FINISH: Finish the conversation and return structured output.
   """
 
@@ -210,8 +236,6 @@ class BuiltinTools(str, enum.Enum):
   ASK_QUESTION = "ask_question"
   START_SUBAGENT = "start_subagent"
   GENERATE_IMAGE = "generate_image"
-  SEARCH_WEB = "search_web"
-  READ_URL_CONTENT = "read_url_content"
   FINISH = "finish"
 
   @classmethod
@@ -226,7 +250,6 @@ class BuiltinTools(str, enum.Enum):
         cls.SEARCH_DIR,
         cls.FIND_FILE,
         cls.VIEW_FILE,
-        cls.READ_URL_CONTENT,
         cls.FINISH,
     ]
 
@@ -247,8 +270,6 @@ class BuiltinTools(str, enum.Enum):
         cls.ASK_QUESTION,
         cls.START_SUBAGENT,
         cls.GENERATE_IMAGE,
-        cls.SEARCH_WEB,
-        cls.READ_URL_CONTENT,
         cls.FINISH,
     ]
 
@@ -322,6 +343,8 @@ class CapabilitiesConfig(pydantic.BaseModel):
       saving tokens and preventing the model from even considering them.
     compaction_threshold: Token count after which the context window may be
       compacted. When None, the backend's default is used.
+    image_model: The model to use for image generation. Defaults to
+      'gemini-3.1-flash-image-preview'.
     finish_tool_schema_json: Optional JSON schema string for the finish tool.
   """
 
@@ -329,6 +352,7 @@ class CapabilitiesConfig(pydantic.BaseModel):
   enabled_tools: list[BuiltinTools] | None = None
   disabled_tools: list[BuiltinTools] | None = None
   compaction_threshold: int | None = None
+  image_model: str = "gemini-3.1-flash-image-preview"
   finish_tool_schema_json: str | None = None
 
   @pydantic.model_validator(mode="after")
@@ -340,81 +364,44 @@ class CapabilitiesConfig(pydantic.BaseModel):
     return self
 
 
-class BaseMcpServerConfig(pydantic.BaseModel):
-  """Base configuration for all Model Context Protocol (MCP) servers.
-
-  Attributes:
-    name: Unique identifier for the MCP server. Must match the regex pattern
-      ^[a-zA-Z0-9_-]+$, which aligns with the naming constraints of the Gemini
-      API tool naming specification (only alphanumeric characters, hyphens, and
-      underscores are permitted).
-    timeout_seconds: Optional timeout in seconds for connecting to the server
-      and listing tools.
-  """
-
-  name: Annotated[str, pydantic.Field(pattern=r"^[a-zA-Z0-9_-]+$")]
-  timeout_seconds: int | None = None
-
-  @pydantic.model_validator(mode="after")
-  def _check_mutually_exclusive(self) -> "BaseMcpServerConfig":
-    # Use getattr to dynamically check subclass fields without causing pytype
-    # errors
-    enabled_tools = getattr(self, "enabled_tools", None)
-    disabled_tools = getattr(self, "disabled_tools", None)
-    if enabled_tools is not None and disabled_tools is not None:
-      raise ValueError(
-          "enabled_tools and disabled_tools should be mutually exclusive."
-      )
-    return self
-
-
-class McpStdioServer(BaseMcpServerConfig):
+class McpStdioServer(pydantic.BaseModel):
   """Configuration for an MCP server connected via stdio.
 
   Attributes:
     command: The command to run to start the server.
-    name: Unique identifier for this MCP server.
     type: The type of connection, always "stdio".
     args: Arguments to pass to the command.
-    env: Environment variables to merge into the spawned subprocess's
-      environment.
-    enabled_tools: Explicit allowlist of tools to enable. Mutually exclusive
-      with disabled_tools. When None, all tools from the server are enabled.
-      Only enabled tools are exposed to the model; others are hidden entirely
-      from the model's context, saving tokens.
-    disabled_tools: Explicit denylist of tools to disable. Mutually exclusive
-      with enabled_tools. When None, all tools from the server are enabled.
-      Disabled tools are removed from the model's context entirely, saving
-      tokens and preventing the model from even considering them.
   """
 
   command: str
   type: Literal["stdio"] = "stdio"
   args: list[str] = pydantic.Field(default_factory=list)
-  env: dict[str, str] | None = None
-  enabled_tools: list[str] | None = None
-  disabled_tools: list[str] | None = None
 
 
-class McpStreamableHttpServer(BaseMcpServerConfig):
+class McpSseServer(pydantic.BaseModel):
+  """Configuration for an MCP server connected via SSE.
+
+  Attributes:
+    url: The URL of the SSE endpoint.
+    type: The type of connection, always "sse".
+    headers: Optional headers to send with the connection request.
+  """
+
+  url: str
+  type: Literal["sse"] = "sse"
+  headers: dict[str, str] | None = None
+
+
+class McpStreamableHttpServer(pydantic.BaseModel):
   """Configuration for an MCP server connected via Streamable HTTP.
 
   Attributes:
     url: The URL of the HTTP endpoint.
-    name: Unique identifier for this MCP server.
     type: The type of connection, always "http".
     headers: Optional headers to send with the connection request.
     timeout: Connection timeout in seconds.
     sse_read_timeout: SSE read timeout in seconds.
     terminate_on_close: Whether to terminate the connection on close.
-    enabled_tools: Explicit allowlist of tools to enable. Mutually exclusive
-      with disabled_tools. When None, all tools from the server are enabled.
-      Only enabled tools are exposed to the model; others are hidden entirely
-      from the model's context, saving tokens.
-    disabled_tools: Explicit denylist of tools to disable. Mutually exclusive
-      with enabled_tools. When None, all tools from the server are enabled.
-      Disabled tools are removed from the model's context entirely, saving
-      tokens and preventing the model from even considering them.
   """
 
   url: str
@@ -423,11 +410,9 @@ class McpStreamableHttpServer(BaseMcpServerConfig):
   timeout: float = 30.0
   sse_read_timeout: float = 300.0
   terminate_on_close: bool = True
-  enabled_tools: list[str] | None = None
-  disabled_tools: list[str] | None = None
 
 
-McpServerConfig = McpStdioServer | McpStreamableHttpServer
+McpServerConfig = McpStdioServer | McpSseServer | McpStreamableHttpServer
 
 
 # =============================================================================
@@ -445,14 +430,12 @@ class ToolCall(pydantic.BaseModel):
     args: Keyword arguments for the tool, as a JSON-serializable dict.
     canonical_path: Optional normalized filesystem path for file-related tools.
       Populated by the Connection layer to enable platform-agnostic L2 policies.
-    server_name: Optional server name if this tool belongs to an MCP server.
   """
 
   name: BuiltinTools | str
   args: dict[str, Any] = pydantic.Field(default_factory=dict)
   id: str | None = None
   canonical_path: str | None = None
-  server_name: str | None = None
 
 
 class ToolResult(pydantic.BaseModel):
@@ -465,7 +448,6 @@ class ToolResult(pydantic.BaseModel):
     result: The tool's return value. Can be any JSON-serializable value.
     error: An error message if execution failed, or None on success.
     exception: The original exception if execution failed. Not serialized.
-    server_name: Optional server name if this tool belongs to an MCP server.
   """
 
   model_config = pydantic.ConfigDict(
@@ -477,7 +459,6 @@ class ToolResult(pydantic.BaseModel):
   result: Any = None
   error: str | None = None
   exception: Exception | None = pydantic.Field(default=None, exclude=True)
-  server_name: str | None = None
 
 
 PythonTool = Callable[..., Any]
@@ -525,7 +506,6 @@ class StepType(str, enum.Enum):
   SYSTEM_MESSAGE = "SYSTEM_MESSAGE"
   COMPACTION = "COMPACTION"
   FINISH = "FINISH"
-  THINKING = "THINKING"
   UNKNOWN = "UNKNOWN"
 
 
@@ -689,22 +669,6 @@ class AntigravityConnectionError(Exception):
   """
 
 
-class AntigravityCancelledError(asyncio.CancelledError):
-  """Raised when an active turn is cancelled programmatically."""
-
-  def __init__(self, message: str = "The request was cancelled by the client."):
-    """Initializes the cancellation error with a default message."""
-    super().__init__(message)
-
-
-class AntigravityExecutionError(Exception):
-  """Raised when the agent execution encounters a terminal error.
-
-  This indicates that the agent loop has terminated due to a fatal error
-  (e.g. model call failure, system constraint violation) and cannot continue.
-  """
-
-
 class AntigravityValidationError(Exception):
   """Wraps Pydantic ValidationError at the SDK boundary.
 
@@ -726,7 +690,7 @@ class AntigravityValidationError(Exception):
     self.errors = errors or []
 
   @classmethod
-  def _from_pydantic(
+  def from_pydantic(
       cls, exc: pydantic.ValidationError
   ) -> "AntigravityValidationError":
     """Constructs from a Pydantic ValidationError.
@@ -737,7 +701,7 @@ class AntigravityValidationError(Exception):
     Returns:
       An AntigravityValidationError wrapping the Pydantic error.
     """
-    return cls(message=str(exc), errors=cast(Any, exc.errors()))
+    return cls(message=str(exc), errors=exc.errors())
 
 
 class TriggerDelivery(str, enum.Enum):
@@ -747,6 +711,28 @@ class TriggerDelivery(str, enum.Enum):
   WAIT_IDLE = "wait_idle"  # Wait until agent is idle before sending.
   # TODO: INTERRUPT — cancel current turn, then send. Deferred due to
   # safety implications for in-flight tool calls (requires Connection.cancel()).
+
+
+class FileChangeKind(str, enum.Enum):
+  """Kind of filesystem change detected by a file-watching trigger."""
+
+  ADDED = "added"
+  MODIFIED = "modified"
+  DELETED = "deleted"
+
+
+class FileChange(pydantic.BaseModel):
+  """A single filesystem change detected by a file-watching trigger.
+
+  Attributes:
+    kind: The type of change (added, modified, deleted).
+    path: Absolute path to the changed file.
+  """
+
+  model_config = pydantic.ConfigDict(frozen=True)
+
+  kind: FileChangeKind
+  path: str
 
 
 # =============================================================================
@@ -835,14 +821,13 @@ class ChatResponse:
               continue
             try:
               chunk = await self._chunk_stream.__anext__()
+              self._buffered_chunks.append(chunk)
             except StopAsyncIteration:
               self._is_done = True
-            except (asyncio.CancelledError, Exception) as e:
+            except Exception as e:
               self._is_done = True
               self._stream_error = e
               raise
-            else:
-              self._buffered_chunks.append(chunk)
 
     return _chunks_gen()
 
@@ -904,16 +889,7 @@ class ChatResponse:
   @property
   def usage_metadata(self) -> UsageMetadata | None:
     """Accumulated token usage across all model invocations in this turn."""
-    return self._conversation._last_turn_usage  # pylint: disable=protected-access
-
-  async def cancel(self) -> None:
-    """Cancels the active execution turn and halts generation.
-
-    This cleanly aborts the active stream on the backend. If the stream is
-    already completed, this method acts as a safe no-op.
-    """
-    if not self._is_done:
-      await self._conversation.cancel()
+    return self._conversation.last_turn_usage
 
 
 # =============================================================================
@@ -1005,10 +981,8 @@ class _BaseMedia(pydantic.BaseModel):
 
   @classmethod
   def from_file(
-      cls: type[_BaseMediaT],
-      path: str | pathlib.Path,
-      description: str | None = None,
-  ) -> _BaseMediaT:
+      cls, path: str | pathlib.Path, description: str | None = None
+  ) -> _BaseMedia:
     """Instantiates a media content primitive from a local file path.
 
     Args:
@@ -1035,7 +1009,7 @@ class Image(_BaseMedia):
 
   @pydantic.field_validator("mime_type")
   @classmethod
-  def _validate_mime_type(cls, v: str) -> str:
+  def validate_mime_type(cls, v: str) -> str:
     """Validates that the MIME type is supported for Image content."""
     if v not in SUPPORTED_IMAGE_MIMES:
       raise ValueError(f"Unsupported Image MIME type: '{v}'")
@@ -1047,7 +1021,7 @@ class Document(_BaseMedia):
 
   @pydantic.field_validator("mime_type")
   @classmethod
-  def _validate_mime_type(cls, v: str) -> str:
+  def validate_mime_type(cls, v: str) -> str:
     """Validates that the MIME type is supported for Document content."""
     if v not in SUPPORTED_DOCUMENT_MIMES:
       raise ValueError(f"Unsupported Document MIME type: '{v}'")
@@ -1059,7 +1033,7 @@ class Audio(_BaseMedia):
 
   @pydantic.field_validator("mime_type")
   @classmethod
-  def _validate_mime_type(cls, v: str) -> str:
+  def validate_mime_type(cls, v: str) -> str:
     """Validates that the MIME type is supported for Audio content."""
     if v not in SUPPORTED_AUDIO_MIMES:
       raise ValueError(f"Unsupported Audio MIME type: '{v}'")
@@ -1071,38 +1045,15 @@ class Video(_BaseMedia):
 
   @pydantic.field_validator("mime_type")
   @classmethod
-  def _validate_mime_type(cls, v: str) -> str:
+  def validate_mime_type(cls, v: str) -> str:
     """Validates that the MIME type is supported for Video content."""
     if v not in SUPPORTED_VIDEO_MIMES:
       raise ValueError(f"Unsupported Video MIME type: '{v}'")
     return v
 
 
-class BuiltinSlashCommandName(str, enum.Enum):
-  """Supported system slash commands.
-
-  Attributes:
-    PLAN: Plan carefully before executing a task (generates an implementation
-      plan artifact and awaits user approval).
-  """
-
-  PLAN = "plan"
-
-
-class SlashCommand(pydantic.BaseModel):
-  """Slash command context primitive.
-
-  Attributes:
-    name: The strict BuiltinSlashCommandName enum.
-  """
-
-  model_config = pydantic.ConfigDict(frozen=True)
-
-  name: BuiltinSlashCommandName
-
-
-ContentPrimitive = str | Image | Document | Audio | Video | SlashCommand
-Content = ContentPrimitive | Sequence[ContentPrimitive]
+ContentPrimitive = str | Image | Document | Audio | Video
+Content = ContentPrimitive | list[ContentPrimitive]
 
 # Registry mapping each supported MIME type to its media class.
 # Built once at import time from the per-category frozensets.
@@ -1143,33 +1094,10 @@ def from_file(
         f"Could not infer a valid MIME type for extension: '{file_path.suffix}'"
     )
 
-  return from_bytes(data, mime_guess, description)
-
-
-def from_bytes(
-    data: bytes, mime_type: str, description: str | None = None
-) -> Image | Document | Audio | Video:
-  """Automatically resolves raw bytes and a MIME type into the correct Content primitive.
-
-  Args:
-      data: Raw file bytes.
-      mime_type: The MIME type of the content.
-      description: Optional text description of the media.
-
-  Returns:
-      A specialized media object (Image, Document, Audio, or Video) based on the
-      MIME type.
-
-  Raises:
-      ValueError: If the MIME type is unsupported.
-  """
-  media_cls = _MIME_TO_MEDIA_CLASS.get(mime_type)
+  media_cls = _MIME_TO_MEDIA_CLASS.get(mime_guess)
   if media_cls is None:
     raise ValueError(
-        f"Unsupported MIME type: '{mime_type}'. "
+        f"Unsupported MIME type: '{mime_guess}'. "
         f"Supported file formats in the SDK are: {sorted(_MIME_TO_MEDIA_CLASS)}"
     )
-  return cast(
-      Image | Document | Audio | Video,
-      media_cls(data=data, mime_type=mime_type, description=description),
-  )
+  return media_cls(data=data, mime_type=mime_guess, description=description)  # pytype: disable=bad-return-type

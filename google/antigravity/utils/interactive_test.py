@@ -24,7 +24,6 @@ from google.antigravity import types
 from google.antigravity.connections import local as local_connection
 from google.antigravity.conversation import conversation
 from google.antigravity.hooks import hooks
-from google.antigravity.hooks import policy
 from google.antigravity.utils import interactive
 
 
@@ -278,24 +277,51 @@ class AskUserHandlerTest(unittest.TestCase):
     self.assertFalse(result)
 
 
-class UpgradePoliciesListTest(unittest.TestCase):
-  """Tests for _upgrade_policies_list."""
+class UpgradeToInteractiveConfirmationTest(unittest.IsolatedAsyncioTestCase):
+  """Tests for _upgrade_to_interactive_confirmation."""
 
-  def test_upgrade_policies_list(self):
-    """Verifies that deny policies on run_command are converted to ask_user."""
-    deny_policy = policy.deny(types.BuiltinTools.RUN_COMMAND.value)
-    other_policy = policy.allow("other_tool")
-    policies = [deny_policy, other_policy]
+  @mock.patch(
+      "google.antigravity.connections."
+      "local.local_connection.LocalConnectionStrategy"
+  )
+  async def test_upgrade_replaces_hook_not_appends(self, mock_strategy_class):
+    """Verifies the upgrade replaces the existing policy hook in-place.
 
-    upgraded = interactive._upgrade_policies_list(policies)
-    self.assertEqual(len(upgraded), 2)
-    self.assertEqual(upgraded[0].decision, policy.Decision.ASK_USER)
-    self.assertEqual(upgraded[0].tool, types.BuiltinTools.RUN_COMMAND.value)
-    self.assertEqual(upgraded[1], other_policy)
+    What: Starts an agent with default confirm_run_command() policies, then
+          calls _upgrade_to_interactive_confirmation.
+    Why: The old code appended a new hook, but the original deny hook fired
+         first and short-circuited. The fix must replace it.
+    How: Counts pre_tool_call_decide_hooks before and after upgrade and
+         asserts the count stays the same (replaced, not appended).
+    """
+    mock_strategy_instance = mock.MagicMock()
+    mock_strategy_instance.stop = mock.AsyncMock()
+    mock_strategy_class.return_value = mock_strategy_instance
+
+    config = local_connection.LocalAgentConfig(system_instructions="test")
+    async with agent.Agent(config) as ag:
+      hooks_before = len(ag._hook_runner._pre_tool_call_decide_hooks)
+      interactive._upgrade_to_interactive_confirmation(ag)
+      hooks_after = len(ag._hook_runner._pre_tool_call_decide_hooks)
+      self.assertEqual(hooks_before, hooks_after,
+                       "Upgrade should replace the hook, not append a new one")
 
 
 class RunInteractiveLoopTest(unittest.IsolatedAsyncioTestCase):
   """Tests for run_interactive_loop."""
+
+  async def test_run_interactive_loop_before_start(self):
+    """Verifies RuntimeError when agent session is not started.
+
+    What: Calls run_interactive_loop on an unstarted agent.
+    Why: The function requires a live conversation to operate.
+    How: Asserts RuntimeError is raised with an informative message.
+    """
+    ag = agent.Agent(
+        local_connection.LocalAgentConfig(system_instructions="test")
+    )
+    with self.assertRaises(RuntimeError):
+      await interactive.run_interactive_loop(ag)
 
   @mock.patch(
       "google.antigravity.connections."
@@ -338,8 +364,9 @@ class RunInteractiveLoopTest(unittest.IsolatedAsyncioTestCase):
     mock_async_input.side_effect = ["", "hello", "exit"]
 
     config = local_connection.LocalAgentConfig(system_instructions="test")
-    with mock.patch("builtins.print") as mock_print:
-      await interactive.run_interactive_loop(config)
+    async with agent.Agent(config) as ag:
+      with mock.patch("builtins.print") as mock_print:
+        await interactive.run_interactive_loop(ag)
 
     mock_conversation.send.assert_called_once_with("hello")
     mock_print.assert_any_call("Agent: Agent response")
@@ -370,84 +397,11 @@ class RunInteractiveLoopTest(unittest.IsolatedAsyncioTestCase):
     mock_async_input.side_effect = KeyboardInterrupt()
 
     config = local_connection.LocalAgentConfig(system_instructions="test")
-    with mock.patch("builtins.print") as mock_print:
-      await interactive.run_interactive_loop(config)
+    async with agent.Agent(config) as ag:
+      with mock.patch("builtins.print") as mock_print:
+        await interactive.run_interactive_loop(ag)
 
     mock_print.assert_any_call("\nGoodbye!")
-
-  @mock.patch(
-      "google.antigravity.connections."
-      "local.local_connection.LocalConnectionStrategy"
-  )
-  @mock.patch.object(conversation.Conversation, "create")
-  @mock.patch(
-      "google.antigravity.utils.interactive.async_input",
-      new_callable=mock.AsyncMock,
-  )
-  async def test_run_interactive_loop_appends_ask_question_hook_when_missing(
-      self, mock_async_input, mock_conv_create, mock_strategy_class
-  ):
-    """Verifies that AskQuestionHook is added when not present."""
-    del mock_strategy_class, mock_conv_create  # Unused.
-    mock_async_input.side_effect = ["exit"]
-
-    mock_agent_instance = mock.MagicMock(spec=agent.Agent)
-    mock_agent_instance.__aenter__ = mock.AsyncMock(
-        return_value=mock_agent_instance
-    )
-    mock_agent_instance.__aexit__ = mock.AsyncMock()
-    mock_agent_class = mock.Mock(return_value=mock_agent_instance)
-
-    config = local_connection.LocalAgentConfig(system_instructions="test")
-    self.assertEqual(len(config.hooks), 0)
-
-    with mock.patch("builtins.print"):
-      await interactive.run_interactive_loop(
-          config, agent_class=mock_agent_class
-      )
-
-    mock_agent_class.assert_called_once()
-    called_config = mock_agent_class.call_args[0][0]
-    self.assertEqual(len(called_config.hooks), 1)
-    self.assertIsInstance(called_config.hooks[0], interactive.AskQuestionHook)
-
-  @mock.patch(
-      "google.antigravity.connections."
-      "local.local_connection.LocalConnectionStrategy"
-  )
-  @mock.patch.object(conversation.Conversation, "create")
-  @mock.patch(
-      "google.antigravity.utils.interactive.async_input",
-      new_callable=mock.AsyncMock,
-  )
-  async def test_run_interactive_loop_does_not_duplicate_ask_question_hook_when_present(
-      self, mock_async_input, mock_conv_create, mock_strategy_class
-  ):
-    """Verifies that AskQuestionHook is not duplicated if already present."""
-    del mock_strategy_class, mock_conv_create  # Unused.
-    mock_async_input.side_effect = ["exit"]
-
-    mock_agent_instance = mock.MagicMock(spec=agent.Agent)
-    mock_agent_instance.__aenter__ = mock.AsyncMock(
-        return_value=mock_agent_instance
-    )
-    mock_agent_instance.__aexit__ = mock.AsyncMock()
-    mock_agent_class = mock.Mock(return_value=mock_agent_instance)
-
-    existing_hook = interactive.AskQuestionHook()
-    config = local_connection.LocalAgentConfig(
-        system_instructions="test", hooks=[existing_hook]
-    )
-
-    with mock.patch("builtins.print"):
-      await interactive.run_interactive_loop(
-          config, agent_class=mock_agent_class
-      )
-
-    mock_agent_class.assert_called_once()
-    called_config = mock_agent_class.call_args[0][0]
-    self.assertEqual(len(called_config.hooks), 1)
-    self.assertIs(called_config.hooks[0], existing_hook)
 
 
 if __name__ == "__main__":

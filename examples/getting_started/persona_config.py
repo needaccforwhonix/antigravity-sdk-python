@@ -52,9 +52,8 @@ import asyncio
 import os
 import sys
 
-from google.antigravity import Agent
-from google.antigravity import LocalAgentConfig
 from google.antigravity import types
+from google.antigravity import Agent, LocalAgentConfig
 
 
 def check_style_guide(language: str) -> str:

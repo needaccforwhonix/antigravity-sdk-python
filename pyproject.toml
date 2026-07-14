@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "google-antigravity"
-version = "0.1.6"
+version = "0.1.0"
 description = "Google Antigravity SDK for building AI agents"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -46,10 +46,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
-otel = [
-    "opentelemetry-api",
-    "opentelemetry-sdk",
-]
 
 [project.urls]
 Homepage = "https://github.com/Google-Antigravity/antigravity-sdk-python"

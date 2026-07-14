@@ -17,8 +17,6 @@
 import unittest
 from unittest import mock
 
-import pydantic
-
 from google.antigravity.connections import connection
 from google.antigravity.triggers import triggers
 
@@ -89,20 +87,6 @@ class TriggerDecoratorTest(unittest.TestCase):
     self.assertEqual(
         str(cm.exception), "Trigger must accept exactly one parameter"
     )
-
-
-class FileChangeTest(unittest.TestCase):
-
-  def test_file_change_is_immutable(self):
-    change = triggers.FileChange(
-        kind=triggers.FileChangeKind.MODIFIED, path="/foo/bar"
-    )
-
-    with self.assertRaises(pydantic.ValidationError):
-      change.path = "/foo/baz"
-
-    with self.assertRaises(pydantic.ValidationError):
-      change.kind = triggers.FileChangeKind.DELETED
 
 
 if __name__ == "__main__":

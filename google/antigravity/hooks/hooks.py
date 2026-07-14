@@ -38,7 +38,7 @@ class HookContext:
     self.parent = parent
     self._store: dict[str, Any] = {}
 
-  def get_state(self, key: str, default: Any = None) -> Any:
+  def get(self, key: str, default: Any = None) -> Any:
     """Gets a value from the context or its parents.
 
     Args:
@@ -51,10 +51,10 @@ class HookContext:
     if key in self._store:
       return self._store[key]
     if self.parent:
-      return self.parent.get_state(key, default)
+      return self.parent.get(key, default)
     return default
 
-  def set_state(self, key: str, value: Any) -> None:
+  def set(self, key: str, value: Any) -> None:
     """Sets a value in the local context.
 
     Args:
@@ -201,19 +201,14 @@ class PostToolCallHook(InspectHook[types.ToolResult]):
 
 
 class OnToolErrorHook(TransformHook[Exception, Any]):
-  """Invoked when a tool fails, allowing authors to shape the failure message.
+  """Invoked when a tool fails, allowing for recovery or modification.
 
-  Receives the raised exception and returns an optional custom error string.
-  If a non-empty string is returned, it replaces the default stacktrace or
-  error message delivered to the model. If None is returned, default error
-  formatting is used. Works symmetrically across built-in and custom tools.
+  Receives the raised exception and returns the error representation that
+  the model should see. If the hook returns None, the harness uses its
+  default error formatting instead.
 
   The hook cannot fix or retry the tool call on its own, but it can guide
   the agent toward a specific resolution.
-
-  To customize failure messages or provide recovery fallbacks for your tool,
-  you can either return a custom error string from this hook or do so directly
-  within your tool implementation.
   """
 
   pass
@@ -291,20 +286,3 @@ on_session_end = _make_hook_decorator(OnSessionEndHook, pass_data=False)
 post_turn = _make_hook_decorator(PostTurnHook)
 post_tool_call = _make_hook_decorator(PostToolCallHook)
 on_tool_error = _make_hook_decorator(OnToolErrorHook)
-
-
-# Internal hooks for telemetry
-class _PreStepHook(InspectHook[types.Step]):
-  """Invoked when a step is first seen in the stream (internal)."""
-
-  pass
-
-
-class _PostStepHook(InspectHook[types.Step]):
-  """Invoked when a step completes (internal)."""
-
-  pass
-
-
-_pre_step = _make_hook_decorator(_PreStepHook)
-_post_step = _make_hook_decorator(_PostStepHook)

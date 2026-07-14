@@ -24,14 +24,9 @@ backend type and how to tear it down.
 
 import abc
 import json
-from typing import Any, AsyncIterator, Callable, Mapping, Sequence
-
+from typing import Any, AsyncIterator, Callable
 import pydantic
-
 from google.antigravity import types
-from google.antigravity.hooks import hooks as hooks_mod
-from google.antigravity.hooks import policy
-from google.antigravity.triggers import triggers as triggers_mod
 
 
 class AgentConfig(abc.ABC, pydantic.BaseModel):
@@ -51,9 +46,9 @@ class AgentConfig(abc.ABC, pydantic.BaseModel):
       )
   )
   tools: list[Callable[..., Any]] = pydantic.Field(default_factory=list)
-  policies: list[policy.Policy] = pydantic.Field(default_factory=list)
-  hooks: list[hooks_mod.Hook] = pydantic.Field(default_factory=list)
-  triggers: list[triggers_mod.Trigger] = pydantic.Field(default_factory=list)
+  policies: list[Any] = pydantic.Field(default_factory=list)
+  hooks: list[Any] = pydantic.Field(default_factory=list)
+  triggers: list[Any] = pydantic.Field(default_factory=list)
   mcp_servers: list[types.McpServerConfig] = pydantic.Field(
       default_factory=list
   )
@@ -63,7 +58,6 @@ class AgentConfig(abc.ABC, pydantic.BaseModel):
   app_data_dir: str | None = None
   response_schema: dict[str, Any] | type[pydantic.BaseModel] | str | None = None
   skills_paths: list[str] = pydantic.Field(default_factory=list)
-  subagents: list[types.SubagentConfig] = pydantic.Field(default_factory=list)
 
   @pydantic.field_validator("response_schema")
   def _validate_schema(cls, v):  # pylint: disable=no-self-argument
@@ -83,46 +77,6 @@ class AgentConfig(abc.ABC, pydantic.BaseModel):
         f"Unsupported response_schema format: {type(v).__name__}. "
         "Expected a JSON string, dict, or pydantic.BaseModel subclass."
     )
-
-  @pydantic.field_validator("policies", mode="before")
-  @classmethod
-  def _validate_policies(cls, v):  # pylint: disable=no-self-argument
-    if v is None:
-      return []
-    if not isinstance(v, (list, tuple, Sequence)) or isinstance(
-        v, (str, bytes)
-    ):
-      v = [v]
-    flat_policies = []
-
-    def flatten(item):
-      if isinstance(item, (list, tuple, Sequence)) and not isinstance(
-          item, (str, bytes)
-      ):
-        for sub_item in item:
-          flatten(sub_item)
-      else:
-        flat_policies.append(item)
-
-    flatten(v)
-    return flat_policies
-
-  def model_copy(
-      self, *, update: Mapping[str, Any] | None = None, deep: bool = False
-  ) -> "AgentConfig":
-    # Override model_copy to prevent deep-copying fields containing callables
-    # or stateful objects (tools, hooks, triggers, policies). Deep-copying
-    # these fields is destructive because it breaks reference identity (e.g.,
-    # duplicating stateful objects that bound methods belong to), making it
-    # impossible to observe side-effects on the original instances from the
-    # outside.
-    copied = super().model_copy(update=update, deep=deep)
-    if deep:
-      copied.tools = list(self.tools)
-      copied.hooks = list(self.hooks)
-      copied.triggers = list(self.triggers)
-      copied.policies = list(self.policies)
-    return copied
 
   @abc.abstractmethod
   def create_strategy(
@@ -162,11 +116,6 @@ class Connection(abc.ABC):
     return True
 
   @property
-  def _initial_history(self) -> Sequence[types.Step]:
-    """Returns the pre-existing session steps restored during handshake."""
-    return []
-
-  @property
   def conversation_id(self) -> str:
     """Returns the conversation identifier, or empty string if unset."""
     return ""
@@ -188,6 +137,9 @@ class Connection(abc.ABC):
     Yields Step objects representing agent actions. The exact fields populated
     depend on the backend, but all steps conform to the Step model.
 
+    Returns:
+      An async iterator of Step objects.
+
     Yields:
       Step objects as they occur.
     """
@@ -199,6 +151,14 @@ class Connection(abc.ABC):
 
   async def cancel(self) -> None:
     """Cancels the current turn in progress."""
+    pass
+
+  async def delete(self) -> None:
+    """Deletes this connection and all associated state from the backend."""
+    pass
+
+  async def signal_idle(self) -> None:
+    """Signals that the connection is idle and ready to receive input."""
     pass
 
   async def wait_for_idle(self) -> None:
@@ -216,7 +176,7 @@ class Connection(abc.ABC):
     """
     return False
 
-  async def _send_tool_results(self, results: list[types.ToolResult]) -> None:
+  async def send_tool_results(self, results: list[types.ToolResult]) -> None:
     """Sends tool execution results back to the agent.
 
     Each connection strategy serializes the results into the backend
@@ -275,5 +235,3 @@ class ConnectionStrategy(abc.ABC):
       exc_tb: The traceback, if any.
     """
     ...
-
-

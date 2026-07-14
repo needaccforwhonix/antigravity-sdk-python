@@ -24,10 +24,11 @@ Conversation directly with any ConnectionStrategy.
 """
 
 import contextlib
-from typing import Any, AsyncIterator, Sequence
+from typing import Any, AsyncIterator
 
 from google.antigravity import types
-from google.antigravity.connections import connection as connection_lib
+from google.antigravity.connections import connection
+
 
 # Default maximum number of steps to retain in history.
 _DEFAULT_MAX_HISTORY_SIZE = 10_000
@@ -48,21 +49,11 @@ def _add_usage(
     target: types.UsageMetadata, source: types.UsageMetadata
 ) -> None:
   """Adds source usage counts into target, treating None as zero."""
-  target.prompt_token_count = (target.prompt_token_count or 0) + (
-      source.prompt_token_count or 0
-  )
-  target.cached_content_token_count = (
-      target.cached_content_token_count or 0
-  ) + (source.cached_content_token_count or 0)
-  target.candidates_token_count = (target.candidates_token_count or 0) + (
-      source.candidates_token_count or 0
-  )
-  target.thoughts_token_count = (target.thoughts_token_count or 0) + (
-      source.thoughts_token_count or 0
-  )
-  target.total_token_count = (target.total_token_count or 0) + (
-      source.total_token_count or 0
-  )
+  target.prompt_token_count += source.prompt_token_count or 0
+  target.cached_content_token_count += source.cached_content_token_count or 0
+  target.candidates_token_count += source.candidates_token_count or 0
+  target.thoughts_token_count += source.thoughts_token_count or 0
+  target.total_token_count += source.total_token_count or 0
 
 
 class Conversation:
@@ -74,10 +65,9 @@ class Conversation:
 
   def __init__(
       self,
-      conn: connection_lib.Connection,
+      conn: connection.Connection,
       *,
       max_history_size: int = _DEFAULT_MAX_HISTORY_SIZE,
-      history: Sequence[types.Step] | None = None,
   ):
     """Initializes the conversation with a connection and empty history.
 
@@ -94,19 +84,12 @@ class Conversation:
     self._max_history_size = max_history_size
     self._cumulative_usage = _zero_usage()
     self._turn_usage: types.UsageMetadata | None = None
-    for step in history or []:
-      self._steps.append(step)
-      if step.type == types.StepType.COMPACTION:
-        self._compaction_indices.append(len(self._steps) - 1)
-      if step.usage_metadata:
-        _add_usage(self._cumulative_usage, step.usage_metadata)
-      self._enforce_max_history()
 
   @classmethod
   @contextlib.asynccontextmanager
   async def create(
       cls,
-      strategy: connection_lib.ConnectionStrategy,
+      strategy: connection.ConnectionStrategy,
   ) -> AsyncIterator["Conversation"]:
     """Creates a new conversation.
 
@@ -117,8 +100,7 @@ class Conversation:
       A new Conversation instance.
     """
     async with strategy:
-      conn = strategy.connect()
-      yield cls(conn, history=conn._initial_history)
+      yield cls(strategy.connect())
 
   # ---------------------------------------------------------------------------
   # Core send / receive
@@ -140,7 +122,7 @@ class Conversation:
       prompt: The user message to send.
       **kwargs: Strategy-specific options.
     """
-    if self._connection.is_idle is False:
+    if not self._connection.is_idle:
       try:
         async for _ in self.receive_steps():
           pass
@@ -309,7 +291,7 @@ class Conversation:
       ]
 
   @property
-  def connection(self) -> connection_lib.Connection:
+  def connection(self) -> connection.Connection:
     """Returns the underlying Connection transport.
 
     Intended for advanced use cases that need direct transport access.
@@ -339,7 +321,7 @@ class Conversation:
     return self._cumulative_usage.model_copy()
 
   @property
-  def _last_turn_usage(self) -> types.UsageMetadata | None:
+  def last_turn_usage(self) -> types.UsageMetadata | None:
     """Returns token usage accumulated during the most recent turn, or None."""
     return self._turn_usage.model_copy() if self._turn_usage else None
 
@@ -358,6 +340,17 @@ class Conversation:
   async def cancel(self) -> None:
     """Cancels the current turn in progress."""
     await self._connection.cancel()
+
+  async def delete(self) -> None:
+    """Deletes this conversation and all associated state from the backend."""
+    await self._connection.delete()
+
+  async def signal_idle(self) -> None:
+    """Signals that the conversation is ready to receive input.
+
+    This is used by the harness to indicate that the agent can proceed.
+    """
+    await self._connection.signal_idle()
 
   async def wait_for_idle(self) -> None:
     """Blocks until the conversation is idle and ready for the next turn."""

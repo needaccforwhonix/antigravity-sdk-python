@@ -20,20 +20,13 @@ files, and uploaded media.
 
 To run:
   python app_data_dir_override.py
-
-Criteria for correct script performance:
-  1. The script exits cleanly with return code 0 (no unhandled exceptions).
-  2. The agent successfully creates the artifact.
-  3. The script prints a success message confirming the artifact was stored in
-     the custom app_data_dir.
 """
 
 import asyncio
 import pathlib
 import tempfile
 
-from google.antigravity import Agent
-from google.antigravity import LocalAgentConfig
+from google.antigravity import Agent, LocalAgentConfig
 
 
 async def main() -> None:
@@ -49,7 +42,7 @@ async def main() -> None:
   print(f"  Custom App Data Dir: {custom_app_data}\n")
 
   # Initialize the agent config with our custom app_data_dir override
-  config = LocalAgentConfig(app_data_dir=str(custom_app_data))
+  config = LocalAgentConfig(app_data_dir=str(custom_app_data))  # pytype: disable=wrong-keyword-args
 
   # Start the agent and ask it to create an artifact
   async with Agent(config) as my_agent:

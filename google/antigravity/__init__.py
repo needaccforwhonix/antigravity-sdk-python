@@ -16,58 +16,26 @@
 
 from google.antigravity.agent import Agent
 from google.antigravity.connections.connection import AgentConfig
-from google.antigravity.connections.local.litert_connection_config import LiteRTAgentConfig
-from google.antigravity.connections.local.litert_connection_config import LiteRTBackend
 from google.antigravity.connections.local.local_connection_config import LocalAgentConfig
-from google.antigravity.connections.local.local_openai_connection_config import LocalOpenAIAgentConfig
 from google.antigravity.tools.tool_context import ToolContext
-from google.antigravity.types import Audio
-from google.antigravity.types import BuiltinTools
 from google.antigravity.types import CapabilitiesConfig
-from google.antigravity.types import Content
-from google.antigravity.types import CustomSystemInstructions
-from google.antigravity.types import Document
-from google.antigravity.types import from_file
-from google.antigravity.types import GeminiAPIEndpoint
-from google.antigravity.types import GeminiModelOptions
-from google.antigravity.types import Image
-from google.antigravity.types import ModelEndpoint
-from google.antigravity.types import ModelTarget
-from google.antigravity.types import ModelType
-from google.antigravity.types import SystemInstructions
-from google.antigravity.types import SystemInstructionSection
-from google.antigravity.types import TemplatedSystemInstructions
+from google.antigravity.types import GeminiConfig
+from google.antigravity.types import GenerationConfig
+from google.antigravity.types import ModelConfig
+from google.antigravity.types import ModelEntry
 from google.antigravity.types import ThinkingLevel
 from google.antigravity.types import UsageMetadata
-from google.antigravity.types import VertexEndpoint
-from google.antigravity.types import Video
 
 __all__ = [
     "Agent",
     "AgentConfig",
     "LocalAgentConfig",
-    "LiteRTAgentConfig",
-    "LiteRTBackend",
-    "LocalOpenAIAgentConfig",
     "ToolContext",
-    "Audio",
-    "BuiltinTools",
     "CapabilitiesConfig",
-    "Content",
-    "CustomSystemInstructions",
-    "Document",
-    "GeminiAPIEndpoint",
-    "GeminiModelOptions",
-    "Image",
-    "ModelEndpoint",
-    "ModelTarget",
-    "ModelType",
-    "SystemInstructions",
-    "SystemInstructionSection",
-    "TemplatedSystemInstructions",
+    "GeminiConfig",
+    "GenerationConfig",
+    "ModelConfig",
+    "ModelEntry",
     "ThinkingLevel",
     "UsageMetadata",
-    "VertexEndpoint",
-    "Video",
-    "from_file",
 ]

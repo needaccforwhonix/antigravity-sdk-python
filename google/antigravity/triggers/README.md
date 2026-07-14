@@ -21,10 +21,10 @@ Use **triggers** for external events (timers, file changes, webhooks).
 ## Quick Start
 
 ```python
-from google.antigravity.triggers import FileChange, FileChangeKind
-from google.antigravity.triggers import helpers
-from google.antigravity.triggers import trigger_runner
 from google.antigravity.triggers import triggers
+from google.antigravity.triggers import trigger_runner
+from google.antigravity.triggers import helpers
+from google.antigravity import types
 
 # 1. Define a trigger using the @trigger decorator.
 @triggers.trigger
@@ -35,7 +35,7 @@ async def health_check(ctx: triggers.TriggerContext) -> None:
     await ctx.send("Health check")
 
 # 2. Or use a helper factory.
-async def on_config_change(ctx, changes: list[FileChange]):
+async def on_config_change(ctx, changes: list[types.FileChange]):
   for change in changes:
     await ctx.send(f"{change.kind.value}: {change.path}")
 

@@ -18,6 +18,7 @@ import asyncio
 import unittest
 from unittest import mock
 
+from google.antigravity import types
 from google.antigravity.connections import connection
 from google.antigravity.triggers import helpers
 from google.antigravity.triggers import triggers
@@ -119,11 +120,11 @@ class OnFileChangeTest(unittest.IsolatedAsyncioTestCase):
     changes = called_with[0]
     self.assertEqual(len(changes), 3)
 
-    self.assertEqual(changes[0].kind, triggers.FileChangeKind.ADDED)
+    self.assertEqual(changes[0].kind, types.FileChangeKind.ADDED)
     self.assertEqual(changes[0].path, "file1.txt")
-    self.assertEqual(changes[1].kind, triggers.FileChangeKind.MODIFIED)
+    self.assertEqual(changes[1].kind, types.FileChangeKind.MODIFIED)
     self.assertEqual(changes[1].path, "file2.txt")
-    self.assertEqual(changes[2].kind, triggers.FileChangeKind.DELETED)
+    self.assertEqual(changes[2].kind, types.FileChangeKind.DELETED)
     self.assertEqual(changes[2].path, "file3.txt")
 
 

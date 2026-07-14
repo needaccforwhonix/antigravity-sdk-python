@@ -14,47 +14,110 @@
 
 """Tests for tool_context module."""
 
+import asyncio
 from unittest import mock
 
 from absl.testing import absltest
 
-from google.antigravity.conversation import conversation as conversation_module
+from google.antigravity.connections import connection as connection_module
 from google.antigravity.tools import tool_context
 
 
-def _make_mock_conversation(**overrides) -> mock.MagicMock:
-  """Creates a mock Conversation with sensible defaults.
+def _make_mock_connection(**overrides) -> mock.MagicMock:
+  """Creates a mock Connection with sensible defaults.
 
   Args:
     **overrides: Attribute overrides for the mock.
 
   Returns:
-    A MagicMock with spec=Conversation.
+    A MagicMock with spec=Connection.
   """
-  conv = mock.MagicMock(spec=conversation_module.Conversation)
-  conv.conversation_id = "test-conv-123"
+  conn = mock.MagicMock(spec=connection_module.Connection)
+  conn.conversation_id = "test-conv-123"
+  conn.is_idle = True
+  conn.send_trigger_notification = mock.AsyncMock()
   for k, v in overrides.items():
-    setattr(conv, k, v)
-  return conv
+    setattr(conn, k, v)
+  return conn
 
 
 class ToolContextPropertyTest(absltest.TestCase):
   """Validates ToolContext property accessors.
 
-  Ensures that conversation_id delegates correctly to
-  the underlying Conversation.
+  Ensures that conversation_id and is_idle delegate correctly to
+  the underlying Connection.
   """
 
   def test_conversation_id(self):
-    """Verifies conversation_id delegates to Conversation.conversation_id.
+    """Verifies conversation_id delegates to Connection.conversation_id.
 
-    What: Checks that the property returns the conversation's ID.
+    What: Checks that the property returns the connection's ID.
     Why: ToolContext must expose identity for tool-level state management.
-    How: Creates a ToolContext with a mock conversation and asserts equality.
+    How: Creates a ToolContext with a mock connection and asserts equality.
     """
-    conv = _make_mock_conversation(conversation_id="abc-123")
-    ctx = tool_context.ToolContext(conv)
+    conn = _make_mock_connection(conversation_id="abc-123")
+    ctx = tool_context.ToolContext(conn)
     self.assertEqual(ctx.conversation_id, "abc-123")
+
+  def test_is_idle_true(self):
+    """Verifies is_idle returns True when the connection is idle.
+
+    What: Checks the idle property delegation.
+    Why: Tools need idle state to decide whether to send follow-up messages.
+    How: Creates a ToolContext with an idle connection and asserts True.
+    """
+    conn = _make_mock_connection(is_idle=True)
+    ctx = tool_context.ToolContext(conn)
+    self.assertTrue(ctx.is_idle)
+
+  def test_is_idle_false(self):
+    """Verifies is_idle returns False when the connection is not idle.
+
+    What: Checks the non-idle case.
+    Why: Validates both branches of the boolean delegation.
+    How: Creates a ToolContext with a non-idle connection and asserts False.
+    """
+    conn = _make_mock_connection(is_idle=False)
+    ctx = tool_context.ToolContext(conn)
+    self.assertFalse(ctx.is_idle)
+
+
+class ToolContextSendTest(absltest.TestCase):
+  """Validates ToolContext.send() delegation.
+
+  Ensures that send() dispatches to Connection.send_trigger_notification().
+  """
+
+  def test_send_delegates_to_connection(self):
+    """Verifies send() calls send_trigger_notification on the connection.
+
+    What: Checks that send() dispatches the message correctly.
+    Why: send() is the primary tool-to-agent communication channel.
+    How: Calls send() and asserts the connection received the message.
+    """
+    conn = _make_mock_connection()
+    ctx = tool_context.ToolContext(conn)
+    asyncio.run(ctx.send("hello agent"))
+    conn.send_trigger_notification.assert_awaited_once_with("hello agent")
+
+  def test_send_multiple_messages(self):
+    """Verifies multiple send() calls dispatch independently.
+
+    What: Checks that each send() creates a separate notification.
+    Why: Tools may need to send multiple messages during execution.
+    How: Calls send() twice and asserts both calls were dispatched.
+    """
+    conn = _make_mock_connection()
+    ctx = tool_context.ToolContext(conn)
+
+    async def _send_two():
+      await ctx.send("first")
+      await ctx.send("second")
+
+    asyncio.run(_send_two())
+    self.assertEqual(conn.send_trigger_notification.await_count, 2)
+    conn.send_trigger_notification.assert_any_await("first")
+    conn.send_trigger_notification.assert_any_await("second")
 
 
 class ToolContextStateTest(absltest.TestCase):
@@ -71,8 +134,8 @@ class ToolContextStateTest(absltest.TestCase):
     Why: Tools should not crash when accessing unset state.
     How: Calls get_state for an absent key and asserts the default.
     """
-    conv = _make_mock_conversation()
-    ctx = tool_context.ToolContext(conv)
+    conn = _make_mock_connection()
+    ctx = tool_context.ToolContext(conn)
     self.assertIsNone(ctx.get_state("missing"))
     self.assertEqual(ctx.get_state("missing", "fallback"), "fallback")
 
@@ -83,8 +146,8 @@ class ToolContextStateTest(absltest.TestCase):
     Why: Core state store functionality must work correctly.
     How: Sets a value and asserts it's returned by get_state.
     """
-    conv = _make_mock_conversation()
-    ctx = tool_context.ToolContext(conv)
+    conn = _make_mock_connection()
+    ctx = tool_context.ToolContext(conn)
     ctx.set_state("counter", 42)
     self.assertEqual(ctx.get_state("counter"), 42)
 
@@ -95,8 +158,8 @@ class ToolContextStateTest(absltest.TestCase):
     Why: State must be mutable for accumulating tool results.
     How: Sets a key twice and asserts the latest value is returned.
     """
-    conv = _make_mock_conversation()
-    ctx = tool_context.ToolContext(conv)
+    conn = _make_mock_connection()
+    ctx = tool_context.ToolContext(conn)
     ctx.set_state("key", "old")
     ctx.set_state("key", "new")
     self.assertEqual(ctx.get_state("key"), "new")
@@ -109,9 +172,9 @@ class ToolContextStateTest(absltest.TestCase):
     How: Creates two contexts, sets state on one, and asserts the other
     does not see it.
     """
-    conv = _make_mock_conversation()
-    ctx1 = tool_context.ToolContext(conv)
-    ctx2 = tool_context.ToolContext(conv)
+    conn = _make_mock_connection()
+    ctx1 = tool_context.ToolContext(conn)
+    ctx2 = tool_context.ToolContext(conn)
     ctx1.set_state("shared_key", "value1")
     self.assertIsNone(ctx2.get_state("shared_key"))
 

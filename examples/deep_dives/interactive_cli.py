@@ -35,9 +35,9 @@ import sys
 from absl import app
 from absl import flags
 from absl import logging
-from google.antigravity import Agent
-from google.antigravity import LocalAgentConfig
+
 from google.antigravity import types
+from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.hooks import policy
 from google.antigravity.utils import interactive
 from google.antigravity.utils.interactive import async_input
@@ -123,25 +123,29 @@ async def run():
       os.path.dirname(__file__), "..", "resources", "mcp_server.py"
   )
   mcp_server = types.McpStdioServer(
-      name="pirate_math",
       command="python3",
       args=[mcp_server_path, "--transport=stdio"],
   )
 
-  disabled_tools = (
-      [types.BuiltinTools.RUN_COMMAND] if _DISABLE_RUN_COMMAND.value else None
-  )
   config = LocalAgentConfig(
       tools=[read_file_upside_down],
       mcp_servers=[mcp_server],
       policies=[policy.ask_user("*", handler=interactive.ask_user_handler)],
       hooks=[interactive.AskQuestionHook()],
       capabilities=types.CapabilitiesConfig(
-          disabled_tools=disabled_tools,
+          disabled_tools=(
+              [types.BuiltinTools.RUN_COMMAND]
+              if _DISABLE_RUN_COMMAND.value
+              else None
+          ),
       ),
-      model=_MODEL_NAME.value,
-      system_instructions=_SYSTEM_INSTRUCTION.value,
   )
+  config.gemini_config = types.GeminiConfig(
+      models=types.ModelConfig(
+          default=types.ModelEntry(name=_MODEL_NAME.value),
+      ),
+  )
+  config.system_instructions = _SYSTEM_INSTRUCTION.value
 
   async with Agent(config) as agent:
     print("\nGoogle Antigravity SDK Demo")

@@ -19,10 +19,8 @@ and the AntigravityValidationError wrapper.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
 import pathlib
 import tempfile
-from typing import Any, cast
 import unittest
 from unittest import mock
 
@@ -89,7 +87,7 @@ class ToolCallTest(unittest.TestCase):
     Why: Forward compatibility — newer backends may add fields.
     How: Constructs a ToolCall with an unknown field and asserts it's absent.
     """
-    tc = types.ToolCall(name="tool", **cast(Any, {"unknown_field": "value"}))
+    tc = types.ToolCall(name="tool", unknown_field="value")
     self.assertFalse(hasattr(tc, "unknown_field"))
 
   def test_missing_name_raises(self):
@@ -163,7 +161,7 @@ class ToolResultTest(unittest.TestCase):
     Why: Consistent extra field handling across all models.
     How: Passes an unknown field and asserts it's not present.
     """
-    tr = types.ToolResult(name="tool", **cast(Any, {"unknown": "value"}))
+    tr = types.ToolResult(name="tool", unknown="value")
     self.assertFalse(hasattr(tr, "unknown"))
 
 
@@ -367,7 +365,7 @@ class AntigravityValidationErrorTest(unittest.TestCase):
   def test_from_pydantic(self):
     """Verifies construction from a real Pydantic ValidationError.
 
-    What: Checks the _from_pydantic factory method.
+    What: Checks the from_pydantic factory method.
     Why: This is the primary construction path at SDK boundaries.
     How: Triggers a ValidationError and wraps it.
     """
@@ -378,7 +376,7 @@ class AntigravityValidationErrorTest(unittest.TestCase):
       err = e
 
     self.assertIsNotNone(err, "Expected ValidationError was not raised.")
-    wrapped = types.AntigravityValidationError._from_pydantic(err)
+    wrapped = types.AntigravityValidationError.from_pydantic(err)
     self.assertIn("name", wrapped.message)
     self.assertGreater(len(wrapped.errors), 0)
 
@@ -466,44 +464,80 @@ class ThinkingLevelTest(unittest.TestCase):
     self.assertNotEqual(types.ThinkingLevel.LOW, "high")
 
 
-class ModelTargetTest(unittest.TestCase):
-  """Tests for the polymorphic ModelTarget hierarchy."""
+class GeminiConfigTest(unittest.TestCase):
+  """Tests for the GeminiConfig Pydantic model."""
 
-  def test_basic_text_construction(self):
-    options = types.GeminiModelOptions(
-        thinking_level=types.ThinkingLevel.HIGH,
+  def test_default_construction(self):
+    """Verifies that GeminiConfig can be constructed with all defaults."""
+    config = types.GeminiConfig()
+    self.assertIsNone(config.api_key)
+    self.assertEqual(config.models.default.name, "gemini-3.5-flash")
+    self.assertIsNone(config.models.default.generation.thinking_level)
+
+  def test_explicit_field_assignment(self):
+    """Verifies that all fields can be explicitly set."""
+    config = types.GeminiConfig(
+        api_key="test-key",
+        models=types.ModelConfig(
+            default=types.ModelEntry(
+                name="gemini-2.5-pro",
+                generation=types.GenerationConfig(
+                    thinking_level=types.ThinkingLevel.LOW,
+                ),
+            ),
+        ),
     )
-    endpoint = types.GeminiAPIEndpoint(api_key="test-key", options=options)
-    mc = types.ModelTarget(
-        name="gemini-pro",
-        types=[types.ModelType.TEXT],
-        endpoint=endpoint,
-    )
-    self.assertEqual(mc.name, "gemini-pro")
-    self.assertEqual(mc.types, [types.ModelType.TEXT])
-    self.assertIsInstance(mc.endpoint, types.GeminiAPIEndpoint)
-    self.assertEqual(mc.endpoint.api_key, "test-key")
+    self.assertEqual(config.api_key, "test-key")
+    self.assertEqual(config.models.default.name, "gemini-2.5-pro")
     self.assertEqual(
-        mc.endpoint.options.thinking_level, types.ThinkingLevel.HIGH
+        config.models.default.generation.thinking_level,
+        types.ThinkingLevel.LOW,
     )
 
-  def test_vertex_endpoint_construction(self):
-    endpoint = types.VertexEndpoint(project="my-proj", location="us-east1")
-    mc = types.ModelTarget(
-        name="gemini-ultra",
-        types=[types.ModelType.TEXT],
-        endpoint=endpoint,
-    )
-    self.assertIsInstance(mc.endpoint, types.VertexEndpoint)
-    self.assertEqual(mc.endpoint.project, "my-proj")
-    self.assertEqual(mc.endpoint.location, "us-east1")
+  def test_string_coercion_in_model_config(self):
+    """Verifies that ModelConfig coerces strings to ModelEntry."""
+    config = types.ModelConfig(default="gemini-2.5-pro")
+    self.assertIsInstance(config.default, types.ModelEntry)
+    self.assertEqual(config.default.name, "gemini-2.5-pro")
 
-  def test_image_model_construction(self):
-    mc = types.ModelTarget(
-        name="imagen-3",
-        types=[types.ModelType.IMAGE],
+  def test_thinking_level_from_string(self):
+    """Verifies that thinking_level accepts raw string values."""
+    gen = types.GenerationConfig(thinking_level="high")
+    self.assertEqual(gen.thinking_level, types.ThinkingLevel.HIGH)
+
+  def test_thinking_level_invalid_string(self):
+    """Verifies that invalid thinking_level strings raise ValidationError."""
+    with self.assertRaises(pydantic.ValidationError):
+      types.GenerationConfig(thinking_level="turbo")
+
+  def test_per_model_api_key(self):
+    """Verifies per-model API key overrides."""
+    entry = types.ModelEntry(name="model-x", api_key="per-model-key")
+    config = types.GeminiConfig(
+        api_key="shared-key",
+        models=types.ModelConfig(default=entry),
     )
-    self.assertEqual(mc.types, [types.ModelType.IMAGE])
+    self.assertEqual(config.api_key, "shared-key")
+    self.assertEqual(config.models.default.api_key, "per-model-key")
+
+  def test_image_generation_model_default(self):
+    """Verifies the default image generation model."""
+    config = types.ModelConfig()
+    self.assertEqual(
+        config.image_generation.name, "gemini-3.1-flash-image-preview"
+    )
+
+  def test_string_coercion_image_generation_slot(self):
+    """Verifies that BeforeValidator coerces string to ModelEntry for image_generation."""
+    config = types.ModelConfig(image_generation="custom-image-model")
+    self.assertIsInstance(config.image_generation, types.ModelEntry)
+    self.assertEqual(config.image_generation.name, "custom-image-model")
+
+  def test_gemini_config_mutable_for_sugar(self):
+    """Verifies GeminiConfig fields can be mutated (needed by AgentConfig sugar)."""
+    config = types.GeminiConfig()
+    config.api_key = "new-key"
+    self.assertEqual(config.api_key, "new-key")
 
 
 class SystemInstructionsTest(unittest.TestCase):
@@ -568,29 +602,18 @@ class SystemInstructionsTest(unittest.TestCase):
     self.assertEqual(si.sections, [])
 
 
-class BuiltinToolsTest(parameterized.TestCase):
+class BuiltinToolsTest(unittest.TestCase):
   """Tests for the BuiltinTools enum."""
 
-  @parameterized.named_parameters(
-      ("list_dir", types.BuiltinTools.LIST_DIR, "list_directory"),
-      ("search_dir", types.BuiltinTools.SEARCH_DIR, "search_directory"),
-      ("view_file", types.BuiltinTools.VIEW_FILE, "view_file"),
-      ("create_file", types.BuiltinTools.CREATE_FILE, "create_file"),
-      ("edit_file", types.BuiltinTools.EDIT_FILE, "edit_file"),
-      ("run_command", types.BuiltinTools.RUN_COMMAND, "run_command"),
-      ("ask_question", types.BuiltinTools.ASK_QUESTION, "ask_question"),
-      ("search_web", types.BuiltinTools.SEARCH_WEB, "search_web"),
-      (
-          "read_url_content",
-          types.BuiltinTools.READ_URL_CONTENT,
-          "read_url_content",
-      ),
-      ("start_subagent", types.BuiltinTools.START_SUBAGENT, "start_subagent"),
-      ("generate_image", types.BuiltinTools.GENERATE_IMAGE, "generate_image"),
-  )
-  def test_enum_values(self, enum_member, expected_value):
+  def test_enum_values(self):
     """Verifies each enum member has the expected string value."""
-    self.assertEqual(enum_member, expected_value)
+    self.assertEqual(types.BuiltinTools.LIST_DIR, "list_directory")
+    self.assertEqual(types.BuiltinTools.SEARCH_DIR, "search_directory")
+    self.assertEqual(types.BuiltinTools.VIEW_FILE, "view_file")
+    self.assertEqual(types.BuiltinTools.CREATE_FILE, "create_file")
+    self.assertEqual(types.BuiltinTools.EDIT_FILE, "edit_file")
+    self.assertEqual(types.BuiltinTools.RUN_COMMAND, "run_command")
+    self.assertEqual(types.BuiltinTools.ASK_QUESTION, "ask_question")
 
   def test_read_only_covers_all_tools(self):
     """Verifies read_only + write tools = full enum.
@@ -607,7 +630,6 @@ class BuiltinToolsTest(parameterized.TestCase):
         types.BuiltinTools.ASK_QUESTION,
         types.BuiltinTools.START_SUBAGENT,
         types.BuiltinTools.GENERATE_IMAGE,
-        types.BuiltinTools.SEARCH_WEB,
     }
     self.assertEqual(
         read_only | write_tools,
@@ -1231,7 +1253,7 @@ class ChatResponseStreamTest(unittest.IsolatedAsyncioTestCase):
       yield t_text
 
     mock_conv = mock.MagicMock(spec=conversation.Conversation)
-    mock_conv._last_turn_usage = types.UsageMetadata(
+    mock_conv.last_turn_usage = types.UsageMetadata(
         prompt_token_count=10,
         candidates_token_count=20,
         total_token_count=30,
@@ -1245,55 +1267,6 @@ class ChatResponseStreamTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(usage.prompt_token_count, 10)
     self.assertEqual(usage.candidates_token_count, 20)
     self.assertEqual(usage.total_token_count, 30)
-
-  async def test_cancel_delegates_to_conversation(self):
-    """Verifies that cancel() delegates to conversation.cancel() if not done."""
-    async def mock_stream() -> AsyncIterator[types.StreamChunk]:
-      yield types.Text(step_index=1, text="hello")
-      # Keep it open by not ending or throwing yet
-
-    mock_conv = mock.AsyncMock(spec=conversation.Conversation)
-    response = types.ChatResponse(mock_stream(), conversation=mock_conv)
-
-    self.assertFalse(response._is_done)
-
-    await response.cancel()
-    mock_conv.cancel.assert_called_once()
-
-  async def test_cancel_completed_stream_is_noop(self):
-    """Verifies that cancel() is a safe no-op on a completed stream."""
-    async def mock_stream() -> AsyncIterator[types.StreamChunk]:
-      yield types.Text(step_index=1, text="hello")
-
-    mock_conv = mock.AsyncMock(spec=conversation.Conversation)
-    response = types.ChatResponse(mock_stream(), conversation=mock_conv)
-
-    # Resolve the stream to complete it
-    await response.resolve()
-    self.assertTrue(response._is_done)
-
-    await response.cancel()
-    mock_conv.cancel.assert_not_called()
-
-  async def test_stream_cancellation_sets_is_done(self):
-    """Verifies that if stream raises CancelledError, _is_done becomes True."""
-    async def mock_cancelled_stream() -> AsyncIterator[types.StreamChunk]:
-      yield types.Text(step_index=1, text="hello")
-      raise asyncio.CancelledError("Cancelled natively")
-
-    mock_conv = mock.AsyncMock(spec=conversation.Conversation)
-    response = types.ChatResponse(
-        mock_cancelled_stream(), conversation=mock_conv
-    )
-
-    chunks = []
-    with self.assertRaisesRegex(asyncio.CancelledError, "Cancelled natively"):
-      async for chunk in response.chunks:
-        chunks.append(chunk)
-
-    self.assertEqual(len(chunks), 1)
-    self.assertTrue(response._is_done)
-    self.assertIsInstance(response._stream_error, asyncio.CancelledError)
 
   def test_thought_chunk_validation(self):
     """Verifies that the Thought subclass validates Pydantic schemas correctly."""
@@ -1320,228 +1293,6 @@ class ChatResponseStreamTest(unittest.IsolatedAsyncioTestCase):
         conversation=mock.MagicMock(spec=conversation.Conversation),
     )
     self.assertEqual(await response.text(), "")
-
-
-class McpServerConfigTest(parameterized.TestCase):
-  """Validates the McpServerConfig Pydantic models and required fields."""
-
-  @parameterized.named_parameters(
-      (
-          "stdio",
-          types.McpStdioServer,
-          {"name": "stdio_server", "command": "node", "args": ["index.js"]},
-          {"name": "stdio_server", "command": "node", "args": ["index.js"]},
-      ),
-      (
-          "stdio_with_env",
-          types.McpStdioServer,
-          {
-              "name": "stdio_server",
-              "command": "node",
-              "args": ["index.js"],
-              "env": {"FOO": "bar"},
-          },
-          {
-              "name": "stdio_server",
-              "command": "node",
-              "args": ["index.js"],
-              "env": {"FOO": "bar"},
-          },
-      ),
-      (
-          "http",
-          types.McpStreamableHttpServer,
-          {"name": "http_server", "url": "http://localhost/http"},
-          {"name": "http_server", "url": "http://localhost/http"},
-      ),
-  )
-  def test_server_construction_success(
-      self, server_cls, init_kwargs, expected_attrs
-  ):
-    """Verifies that MCP server configs construct successfully with valid arguments.
-
-    What: Checks basic field assignment with required name and command/url.
-    Why: Validates the happy path for all MCP connection types.
-    How: Constructs the target class with arguments and asserts its properties.
-
-    Args:
-      server_cls: The MCP server class under test.
-      init_kwargs: Dictionary of constructor arguments.
-      expected_attrs: Dict of expected attribute values after construction.
-    """
-    server = server_cls(**init_kwargs)
-    for attr, val in expected_attrs.items():
-      self.assertEqual(getattr(server, attr), val)
-
-  @parameterized.named_parameters(
-      ("stdio", types.McpStdioServer, {"command": "node"}),
-      ("http", types.McpStreamableHttpServer, {"url": "http://localhost/http"}),
-  )
-  def test_server_missing_name_raises(self, server_cls, init_kwargs):
-    """Verifies that MCP server configs raise ValidationError when name is omitted.
-
-    What: Checks required field validation for name.
-    Why: Enforces mandatory naming constraints across all server types.
-    How: Attempts construction without name and asserts ValidationError.
-
-    Args:
-      server_cls: The MCP server class under test.
-      init_kwargs: Dictionary of constructor arguments missing the name field.
-    """
-    with self.assertRaises(pydantic.ValidationError):
-      server_cls(**init_kwargs)  # type: ignore
-
-  @parameterized.named_parameters(
-      (
-          "stdio_enabled",
-          types.McpStdioServer,
-          {
-              "name": "stdio_server",
-              "command": "node",
-              "enabled_tools": ["tool1"],
-          },
-          "enabled_tools",
-          ["tool1"],
-      ),
-      (
-          "stdio_disabled",
-          types.McpStdioServer,
-          {
-              "name": "stdio_server",
-              "command": "node",
-              "disabled_tools": ["tool2"],
-          },
-          "disabled_tools",
-          ["tool2"],
-      ),
-  )
-  def test_server_construction_with_filtering(
-      self, server_cls, init_kwargs, expected_attr, expected_val
-  ):
-    """Verifies that MCP server configs construct with enabled or disabled tools."""
-    server = server_cls(**init_kwargs)
-    self.assertEqual(getattr(server, expected_attr), expected_val)
-
-  @parameterized.named_parameters(
-      (
-          "stdio_different_tools",
-          types.McpStdioServer,
-          {
-              "name": "stdio_server",
-              "command": "node",
-              "enabled_tools": ["tool1"],
-              "disabled_tools": ["tool2"],
-          },
-      ),
-      (
-          "stdio_same_tool",
-          types.McpStdioServer,
-          {
-              "name": "stdio_server",
-              "command": "node",
-              "enabled_tools": ["tool1"],
-              "disabled_tools": ["tool1"],
-          },
-      ),
-  )
-  def test_server_exclusive_filtering_raises(self, server_cls, init_kwargs):
-    """Verifies that providing both enabled and disabled tools raises ValidationError."""
-    with self.assertRaises(pydantic.ValidationError) as ctx:
-      server_cls(**init_kwargs)
-    self.assertIn(
-        "enabled_tools and disabled_tools should be mutually exclusive.",
-        str(ctx.exception),
-    )
-
-  def test_union_deserialization(self):
-    """Verifies that TypeAdapter parses McpServerConfig union variants with name correctly.
-
-    What: Checks Pydantic union polymorphic deserialization.
-    Why: Ensures config files or dicts can be parsed polymorphically.
-    How: Validates a stdio dict with name against McpServerConfig TypeAdapter.
-    """
-    adapter = pydantic.TypeAdapter(types.McpServerConfig)
-
-    data = {"type": "stdio", "name": "stdio_server", "command": "node"}
-    server = adapter.validate_python(data)
-    self.assertIsInstance(server, types.McpStdioServer)
-    self.assertEqual(server.name, "stdio_server")
-
-  @parameterized.parameters(
-      "validName",
-      "valid-name",
-      "valid_name",
-      "valid_name-123",
-  )
-  def test_server_valid_names(self, name):
-    """Verifies that Gemini-compliant server names pass validation."""
-    server = types.McpStdioServer(name=name, command="node")
-    self.assertEqual(server.name, name)
-
-  @parameterized.parameters(
-      "invalid name",
-      "invalid.name",
-      "invalid/name",
-      "invalid@name",
-      "invalidName!",
-  )
-  def test_server_invalid_names_raise(self, name):
-    """Verifies that names violating Gemini's regex pattern trigger validation errors."""
-    with self.assertRaises(pydantic.ValidationError):
-      types.McpStdioServer(name=name, command="node")
-
-
-class SubagentCapabilitiesTest(unittest.TestCase):
-  """Validates the SubagentCapabilities Pydantic model."""
-
-  def test_defaults(self):
-    sc = types.SubagentCapabilities()
-    self.assertIsNone(sc.enabled_tools)
-    self.assertIsNone(sc.disabled_tools)
-
-  def test_mutually_exclusive_ok_enabled(self):
-    sc = types.SubagentCapabilities(
-        enabled_tools=[types.BuiltinTools.EDIT_FILE]
-    )
-    self.assertEqual(sc.enabled_tools, [types.BuiltinTools.EDIT_FILE])
-    self.assertIsNone(sc.disabled_tools)
-
-  def test_mutually_exclusive_ok_disabled(self):
-    sc = types.SubagentCapabilities(
-        disabled_tools=[types.BuiltinTools.RUN_COMMAND]
-    )
-    self.assertIsNone(sc.enabled_tools)
-    self.assertEqual(sc.disabled_tools, [types.BuiltinTools.RUN_COMMAND])
-
-  def test_mutually_exclusive_raises(self):
-    with self.assertRaises(pydantic.ValidationError):
-      types.SubagentCapabilities(
-          enabled_tools=[types.BuiltinTools.EDIT_FILE],
-          disabled_tools=[types.BuiltinTools.RUN_COMMAND],
-      )
-
-
-class SubagentConfigTest(unittest.TestCase):
-  """Validates the SubagentConfig Pydantic model."""
-
-  def test_basic_construction(self):
-    sub = types.SubagentConfig(
-        name="helper",
-        description="helpful agent",
-        system_instructions="always help",
-    )
-    self.assertEqual(sub.name, "helper")
-    self.assertEqual(sub.description, "helpful agent")
-    self.assertEqual(sub.system_instructions, "always help")
-    self.assertIsNone(sub.capabilities)
-    self.assertEqual(sub.tools, [])
-
-  def test_required_fields(self):
-    with self.assertRaises(pydantic.ValidationError):
-      types.SubagentConfig(**{"name": "helper"})  # Missing description
-
-    with self.assertRaises(pydantic.ValidationError):
-      types.SubagentConfig(**{"description": "helpful agent"})  # Missing name
 
 
 if __name__ == "__main__":

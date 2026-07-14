@@ -33,15 +33,16 @@ Includes:
 from __future__ import annotations
 
 import asyncio
-import sys
 import threading
-from typing import Any
-from google.antigravity import agent as agent_module
+from typing import TYPE_CHECKING
+
 from google.antigravity import types
-from google.antigravity.connections import connection as connection_module
 from google.antigravity.hooks import hooks
 from google.antigravity.hooks import policy as policy_module
 from google.antigravity.types import QuestionResponse
+
+if TYPE_CHECKING:
+  from google.antigravity import agent as agent_module
 
 
 async def async_input(prompt: str = "") -> str:
@@ -76,52 +77,6 @@ async def async_input(prompt: str = "") -> str:
   return await future
 
 
-class Spinner:
-  """A lightweight terminal spinner for async processing feedback."""
-
-  def __init__(self, message: str = "Thinking..."):
-    self._message = message
-    self._running = False
-    self._task = None
-    self._frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    # TTY Check: Spinner escape sequences only write to standard out if it's a
-    # real terminal. This prevents log file corruption during redirection.
-    # Note: Ancient cmd environments that lack ANSI support will output escape
-    # codes literally; users are expected to use modern terminal systems.
-    self._enabled = sys.stdout.isatty()
-
-  def update(self, message: str) -> None:
-    """Updates the spinner display message."""
-    self._message = message
-
-  async def _spin(self) -> None:
-    idx = 0
-    while self._running:
-      sys.stdout.write(f"\r\033[K{self._frames[idx]} {self._message}")
-      sys.stdout.flush()
-      idx = (idx + 1) % len(self._frames)
-      await asyncio.sleep(0.08)
-
-  async def __aenter__(self) -> "Spinner":
-    if self._enabled:
-      self._running = True
-      self._task = asyncio.create_task(self._spin())
-    return self
-
-  async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-    if not self._enabled:
-      return
-    self._running = False
-    if self._task:
-      self._task.cancel()
-      try:
-        await self._task
-      except asyncio.CancelledError:
-        pass
-    sys.stdout.write("\r\033[K")
-    sys.stdout.flush()
-
-
 class ToolConfirmationHook(hooks.PreToolCallDecideHook):
   """Hook that prompts the user for confirmation before executing a tool."""
 
@@ -138,7 +93,6 @@ class ToolConfirmationHook(hooks.PreToolCallDecideHook):
       A HookResult indicating whether to allow or deny execution.
     """
     print(f"\nTool execution requested: {data.name}")
-
     if data.args:
       print(f"Arguments: {data.args}")
 
@@ -236,16 +190,32 @@ class AskQuestionHook(hooks.OnInteractionHook):
     return hooks.QuestionHookResult(responses=responses)
 
 
-def _upgrade_policies_list(policies: list[Any]) -> list[Any]:
-  """Upgrades RUN_COMMAND deny policies in place to ASK_USER policy."""
+def _upgrade_to_interactive_confirmation(
+    agent: agent_module.Agent,
+) -> None:
+  """Upgrades run_command from DENY to ASK_USER for interactive sessions.
+
+  Scans the agent's registered policies for ``confirm_run_command``-style deny
+  rules on ``run_command`` and replaces them with ``ask_user`` rules wired
+  to the built-in ``ask_user_handler``.  This gives interactive users y/n
+  prompts instead of hard denials.
+
+  Args:
+    agent: A started Agent instance.
+  """
+  config = agent._config  # pylint: disable=protected-access
+  if not hasattr(config, "policies"):
+    return
+
   upgraded = []
-  for p in policies:
+  for p in config.policies:
     if (
         isinstance(p, policy_module.Policy)
         and p.tool == types.BuiltinTools.RUN_COMMAND.value
         and p.decision == policy_module.Decision.DENY
         and p.when is None
     ):
+      # Replace bare deny(run_command) with ask_user(run_command).
       upgraded.append(
           policy_module.ask_user(
               types.BuiltinTools.RUN_COMMAND.value,
@@ -255,42 +225,50 @@ def _upgrade_policies_list(policies: list[Any]) -> list[Any]:
       )
     else:
       upgraded.append(p)
-  return upgraded
+
+  config.policies = upgraded
+  # Replace the existing policy-enforce hook in the hook runner so
+  # the old deny hook doesn't fire first and short-circuit.
+  new_hook = policy_module.enforce(upgraded)
+  runner = agent._hook_runner  # pylint: disable=protected-access
+  assert runner is not None, "Agent must be started before upgrading policies."
+  hooks_list = runner._pre_tool_call_decide_hooks  # pylint: disable=protected-access  # pytype: disable=attribute-error
+  for i, h in enumerate(hooks_list):
+    if isinstance(h, policy_module._PolicyDecideHook):  # pylint: disable=protected-access
+      hooks_list[i] = new_hook
+      return
+  # No existing policy hook found; append as fallback.
+  hooks_list.append(new_hook)
 
 
-async def run_interactive_loop(
-    config: connection_module.AgentConfig,
-    agent_class: type[agent_module.Agent] = agent_module.Agent,
-) -> None:
+async def run_interactive_loop(agent: agent_module.Agent) -> None:
   """Runs an interactive CLI loop for debugging and development.
 
-  Constructs and runs the agent within an interactive session, registering an
-  ``AskQuestionHook`` and upgrading ``confirm_run_command()`` to ASK_USER
-  so the user can answer prompts from the model.
+  Reads user input from stdin, sends it to the agent, and prints the
+  agent's responses. Registers an ``AskQuestionHook`` so the agent can
+  prompt the user with questions during execution.
+
+  For agents using the default ``confirm_run_command()`` policy, this
+  function automatically upgrades ``run_command`` from DENY to ASK_USER,
+  giving the interactive user y/n confirmation prompts instead of hard
+  denials.
 
   Type ``exit`` or ``quit`` to end the session. Ctrl+C also exits cleanly.
 
   Args:
-    config: Declarative agent configuration.
-    agent_class: The Agent class to instantiate. Defaults to the base Agent.
+    agent: A started Agent instance (inside an ``async with`` block).
+
+  Raises:
+    RuntimeError: If the agent session has not been started.
   """
-  hooks_list = list(config.hooks)
-  if not any(isinstance(hook, AskQuestionHook) for hook in hooks_list):
-    hooks_list.append(AskQuestionHook())
+  if not agent.is_started:
+    raise RuntimeError(
+        "Agent session not started. Use 'async with Agent(...)'."
+    )
 
-  policies_list = _upgrade_policies_list(config.policies)
+  agent.register_hook(AskQuestionHook())
+  _upgrade_to_interactive_confirmation(agent)
 
-  upgraded_config = config.model_copy(
-      update={"hooks": hooks_list, "policies": policies_list}
-  )
-  agent = agent_class(upgraded_config)
-
-  async with agent:
-    await _run_loop(agent)
-
-
-async def _run_loop(agent: agent_module.Agent) -> None:
-  """Internal helper that runs the REPL execution loop."""
   print("Starting interactive loop. Type 'exit' or 'quit' to end.")
   while True:
     try:
@@ -304,23 +282,9 @@ async def _run_loop(agent: agent_module.Agent) -> None:
 
       await agent.conversation.send(user_input)
 
-      async with Spinner() as spinner:
-        async for step in agent.conversation.receive_steps():
-
-          if step.type == types.StepType.TOOL_CALL:
-            tool_name = step.tool_calls[0].name if step.tool_calls else "tool"
-            spinner.update(f"Running tool '{tool_name}'...")
-          elif step.type == types.StepType.COMPACTION:
-            spinner.update("Compacting context...")
-          elif step.source == types.StepSource.MODEL and step.thinking_delta:
-            spinner.update("Reasoning...")
-
-          if step.is_complete_response:
-            break
-        else:
-          continue
-
-      print(f"Agent: {step.content}")
+      async for step in agent.conversation.receive_steps():
+        if step.is_complete_response:
+          print(f"Agent: {step.content}")
 
     except (KeyboardInterrupt, EOFError):
       print("\nGoodbye!")

@@ -31,7 +31,6 @@ injectable parameters so the model never sees them.
 import asyncio
 import functools
 import inspect
-import types as std_types
 import typing
 from typing import Any, Callable
 
@@ -53,9 +52,7 @@ def _find_context_param(fn: Callable[..., Any]) -> str | None:
   Returns:
     The parameter name, or None if no ToolContext parameter is found.
   """
-  target = fn
-  while isinstance(target, ToolWithSchema):
-    target = target.fn
+  target = fn.fn if isinstance(fn, ToolWithSchema) else fn
   try:
     hints = typing.get_type_hints(target)
   except (TypeError, NameError, AttributeError):
@@ -67,8 +64,7 @@ def _find_context_param(fn: Callable[..., Any]) -> str | None:
     if ann is tool_context_module.ToolContext:
       return name
     # Handle Optional[ToolContext] / ToolContext | None forms.
-    origin = typing.get_origin(ann)
-    if origin is typing.Union or origin is std_types.UnionType:
+    if typing.get_origin(ann) is typing.Union:
       if tool_context_module.ToolContext in typing.get_args(ann):
         return name
   return None
@@ -90,28 +86,16 @@ def _make_public_callable(
   Returns:
     A wrapper callable with a cleaned signature.
   """
-  if isinstance(fn, ToolWithSchema):
-    return ToolWithSchema(
-        _make_public_callable(fn.fn, context_param), fn.input_schema
-    )
-
-  sig = inspect.signature(fn)
+  target = fn.fn if isinstance(fn, ToolWithSchema) else fn
+  sig = inspect.signature(target)
   new_params = [p for n, p in sig.parameters.items() if n != context_param]
   public_sig = sig.replace(parameters=new_params)
 
-  if _is_async(fn):
+  @functools.wraps(target)
+  def _proxy(**kwargs):
+    return target(**kwargs)
 
-    @functools.wraps(fn)
-    async def _proxy(**kwargs):
-      return await fn(**kwargs)
-
-  else:
-
-    @functools.wraps(fn)
-    def _proxy(**kwargs):
-      return fn(**kwargs)
-
-  setattr(_proxy, "__signature__", public_sig)
+  _proxy.__signature__ = public_sig
   return _proxy
 
 
@@ -130,8 +114,6 @@ class ToolWithSchema:
 
 def _is_async(callable_obj: Any) -> bool:
   """Returns True if the callable is async (coroutine function or __call__)."""
-  if isinstance(callable_obj, ToolWithSchema):
-    return _is_async(callable_obj.fn)
   return inspect.iscoroutinefunction(callable_obj) or (
       hasattr(callable_obj, "__call__")
       and inspect.iscoroutinefunction(callable_obj.__call__)

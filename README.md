@@ -27,35 +27,6 @@ Get started by running one of the [`examples/`](examples/), such as the
 export GEMINI_API_KEY="your_api_key_here"
 python ./examples/getting_started/hello_world.py
 ```
-## Gemini Enterprise Agent Platform (formerly Vertex AI)
-
-To use the SDK with Gemini Enterprise Agent Platform (formerly Vertex AI),
-configure `LocalAgentConfig` with `vertex=True` and specify your GCP `project`
-and `location`.
-
-By default, the SDK uses Application Default Credentials (ADC) for
-authentication.
-
-```python
-from google.antigravity import Agent, LocalAgentConfig
-
-config = LocalAgentConfig(
-    vertex=True,
-    project="your-gcp-project",
-    location="us-central1",
-)
-
-async with Agent(config) as agent:
-    response = await agent.chat("Hello!")
-    print(await response.text())
-```
-
-Ensure you have authenticated locally before running the agent:
-
-```sh
-gcloud auth application-default login
-```
-
 ## Concepts
 
 ### Simple Agent
@@ -129,14 +100,15 @@ By default, `Agent` runs in **read-only mode** for safety. Pass
 ### Interactive Loop
 
 ```python
-from google.antigravity import LocalAgentConfig, CapabilitiesConfig
+from google.antigravity import Agent, LocalAgentConfig, CapabilitiesConfig
 from google.antigravity.utils.interactive import run_interactive_loop
 
 config = LocalAgentConfig(
     # api_key="your_api_key_here",
     capabilities=CapabilitiesConfig(),
 )
-await run_interactive_loop(config)
+async with Agent(config) as agent:
+    await run_interactive_loop(agent)
 ```
 
 ### Advanced Usage with Conversation
@@ -151,11 +123,13 @@ import asyncio
 from google.antigravity.connections.local import LocalConnectionStrategy
 from google.antigravity.conversation.conversation import Conversation
 from google.antigravity.tools.tool_runner import ToolRunner
+from google.antigravity.types import GeminiConfig
 
 async def main():
     tool_runner = ToolRunner()
     strategy = LocalConnectionStrategy(
         tool_runner=tool_runner,
+        # gemini_config=GeminiConfig(api_key="your_api_key_here"),
     )
     
     async with Conversation.create(strategy) as conversation:
@@ -237,7 +211,7 @@ from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.types import McpStdioServer
 
 config = LocalAgentConfig(
-    mcp_servers=[McpStdioServer(name="my_server", command="npx", args=["my-mcp-server"])],
+    mcp_servers=[McpStdioServer(command="npx", args=["my-mcp-server"])],
 )
 async with Agent(config) as agent:
     response = await agent.chat("Use the MCP tools to help me.")
@@ -248,7 +222,7 @@ async with Agent(config) as agent:
 Control agent behavior with a declarative policy system:
 
 ```python
-from google.antigravity import LocalAgentConfig, CapabilitiesConfig
+from google.antigravity import Agent, LocalAgentConfig, CapabilitiesConfig
 from google.antigravity.hooks.policy import deny, allow, ask_user, enforce
 from google.antigravity.utils.interactive import run_interactive_loop
 
@@ -262,7 +236,8 @@ config = LocalAgentConfig(
     capabilities=CapabilitiesConfig(),
     policies=policies,
 )
-await run_interactive_loop(config)
+async with Agent(config) as agent:
+    await run_interactive_loop(agent)
 ```
 
 ### Triggers
@@ -271,7 +246,7 @@ Run background tasks that react to external events and push messages into the
 agent:
 
 ```python
-from google.antigravity import LocalAgentConfig
+from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.triggers import every
 from google.antigravity.utils.interactive import run_interactive_loop
 
@@ -281,7 +256,8 @@ async def check_status(ctx):
 config = LocalAgentConfig(
     triggers=[every(60, check_status)],
 )
-await run_interactive_loop(config)
+async with Agent(config) as agent:
+    await run_interactive_loop(agent)
 ```
 
 ## Architecture
@@ -298,13 +274,13 @@ The SDK follows a three-layer architecture:
 
 For more detailed documentation on specific components, see:
 
--   [Agent](google/antigravity/agent.py) — High-level, batteries-included entry point.
--   [Connections](google/antigravity/connections/README.md) — Transport and backend abstraction.
--   [Conversation](google/antigravity/conversation/README.md) — Stateful session management.
--   [Hooks](google/antigravity/hooks/README.md) — Agent lifecycle interception and policies.
--   [MCP](google/antigravity/mcp/README.md) — Model Context Protocol integration.
--   [Tools](google/antigravity/tools/README.md) — In-process tool execution.
--   [Triggers](google/antigravity/triggers/README.md) — Background tasks and external events.
+-   [Agent](agent.py) — High-level, batteries-included entry point.
+-   [Connections](connections/README.md) — Transport and backend abstraction.
+-   [Conversation](conversation/README.md) — Stateful session management.
+-   [Hooks](hooks/README.md) — Agent lifecycle interception and policies.
+-   [MCP](mcp/README.md) — Model Context Protocol integration.
+-   [Tools](tools/README.md) — In-process tool execution.
+-   [Triggers](triggers/README.md) — Background tasks and external events.
 
 ## License
 
