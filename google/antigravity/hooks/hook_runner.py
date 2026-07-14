@@ -34,6 +34,8 @@ _HOOK_TYPE_REGISTRY: list[tuple[type, str]] = [
     (hooks_base.OnToolErrorHook, '_on_tool_error_hooks'),
     (hooks_base.OnInteractionHook, '_on_interaction_hooks'),
     (hooks_base.OnCompactionHook, '_on_compaction_hooks'),
+    (hooks_base._PreStepHook, '_pre_step_hooks_list'),  # pylint: disable=protected-access
+    (hooks_base._PostStepHook, '_post_step_hooks_list'),  # pylint: disable=protected-access
 ]
 
 
@@ -53,6 +55,8 @@ class HookRunner:
       on_tool_error_hooks: list[hooks_base.OnToolErrorHook] | None = None,
       on_interaction_hooks: list[hooks_base.OnInteractionHook] | None = None,
       on_compaction_hooks: list[hooks_base.OnCompactionHook] | None = None,
+      _pre_step_hooks: list[hooks_base._PreStepHook] | None = None,  # pylint: disable=invalid-name,protected-access
+      _post_step_hooks: list[hooks_base._PostStepHook] | None = None,  # pylint: disable=invalid-name,protected-access
   ):
     self._on_session_start_hooks = on_session_start_hooks or []
     self._on_session_end_hooks = on_session_end_hooks or []
@@ -63,6 +67,8 @@ class HookRunner:
     self._on_tool_error_hooks = on_tool_error_hooks or []
     self._on_interaction_hooks = on_interaction_hooks or []
     self._on_compaction_hooks = on_compaction_hooks or []
+    self._pre_step_hooks_list = _pre_step_hooks or []
+    self._post_step_hooks_list = _post_step_hooks or []
 
     self.session_context = hooks_base.SessionContext()
 
@@ -79,6 +85,8 @@ class HookRunner:
         self._on_tool_error_hooks,
         self._on_interaction_hooks,
         self._on_compaction_hooks,
+        self._pre_step_hooks_list,
+        self._post_step_hooks_list,
     ))
 
   @property
@@ -118,6 +126,14 @@ class HookRunner:
   @property
   def on_compaction_hooks(self) -> tuple[hooks_base.OnCompactionHook, ...]:
     return tuple(self._on_compaction_hooks)
+
+  @property
+  def _pre_step_hooks(self) -> tuple[hooks_base._PreStepHook, ...]:
+    return tuple(self._pre_step_hooks_list)
+
+  @property
+  def _post_step_hooks(self) -> tuple[hooks_base._PostStepHook, ...]:
+    return tuple(self._post_step_hooks_list)
 
   def register_hook(self, hook: Any):
     """Registers a hook by inferring its type.
@@ -281,3 +297,18 @@ class HookRunner:
     op_context = hooks_base.OperationContext(turn_context)
     for hook in self._on_compaction_hooks:
       await hook.run(context=op_context, data=data)
+
+  # Telemetry Internal Step Hooks
+  async def dispatch_pre_step(
+      self, turn_context: hooks_base.TurnContext, step: types.Step
+  ) -> None:
+    """Dispatches internal pre-step observability events."""
+    for hook in self._pre_step_hooks:
+      await hook.run(context=turn_context, data=step)
+
+  async def dispatch_post_step(
+      self, turn_context: hooks_base.TurnContext, step: types.Step
+  ) -> None:
+    """Dispatches internal post-step observability events."""
+    for hook in self._post_step_hooks:
+      await hook.run(context=turn_context, data=step)

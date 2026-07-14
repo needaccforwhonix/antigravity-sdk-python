@@ -15,6 +15,7 @@
 """Unit tests for HookRouter."""
 
 import asyncio
+import os
 from typing import Any
 from absl.testing import absltest
 from google.antigravity.connections.local import localharness_pb2
@@ -881,7 +882,7 @@ class HookRouterPreToolTest(absltest.TestCase):
 
       self.assertLen(captured_tool_calls, 1)
       self.assertEqual(
-          captured_tool_calls[0].args["file_path"], "/home/user/foo.py"
+          os.path.normpath(captured_tool_calls[0].args["file_path"]), os.path.normpath("/home/user/foo.py")
       )
 
       req2 = localharness_pb2.CallHookRequest(
@@ -898,7 +899,7 @@ class HookRouterPreToolTest(absltest.TestCase):
 
       self.assertLen(captured_tool_calls, 2)
       self.assertEqual(
-          captured_tool_calls[1].args["TargetFile"], "/home/user/bar.py"
+          os.path.normpath(captured_tool_calls[1].args["TargetFile"]), os.path.normpath("/home/user/bar.py")
       )
 
     asyncio.run(_test())

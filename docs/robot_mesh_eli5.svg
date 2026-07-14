@@ -118,10 +118,10 @@
     
     <text x="400" y="295" font-size="12" font-weight="bold" fill="#ff7b72" text-anchor="middle" class="collision-only" filter="url(#glow)">COLLISION! 🛑</text>
     <text x="400" y="295" font-size="12" font-weight="bold" fill="#56d364" text-anchor="middle" class="lease-only" filter="url(#glow)">LEASE OK 🟢</text>
-    <text x="400" y="312" font-size="10" fill="#8b949e" text-anchor="middle">(Hier klicken zum Umschalten)</text>
+    <text x="400" y="312" font-size="10" fill="#8b949e" text-anchor="middle">(Click here to toggle state)</text>
   </g>
 
-  <!-- ROBOT 1: Blue (Thinker - Vektor-Erzeuger) -->
+  <!-- ROBOT 1: Blue (Thinker - Vector Generator) -->
   <g id="robot-blue" class="clickable floating-1" onclick="showExplanation('blue')">
     <!-- Position offset to match center 210,180 -->
     <g transform="translate(150, 120)">
@@ -166,7 +166,7 @@
     </g>
   </g>
 
-  <!-- ROBOT 3: Purple (NATS Swarm Swarm coordinator) -->
+  <!-- ROBOT 3: Purple (NATS Swarm coordinator) -->
   <g id="robot-purple" class="clickable floating-3" onclick="showExplanation('purple')">
     <!-- Position offset to match center 400,370 -->
     <g transform="translate(340, 370)">
@@ -193,9 +193,9 @@
     <rect x="0" y="0" width="720" height="80" rx="10" fill="#161b22" stroke="#30363d" stroke-width="2" />
     
     <!-- Title indicator -->
-    <text x="20" y="30" font-size="14" font-weight="bold" fill="#58a6ff" id="info-title">ELI5-Erklärung: Das Problem</text>
+    <text x="20" y="30" font-size="14" font-weight="bold" fill="#58a6ff" id="info-title">ELI5 Explanation: The Collision Problem</text>
     <!-- Text body -->
-    <text x="20" y="55" font-size="12" fill="#adbac7" id="info-text">Roboter wollen zeitgleich durch dasselbe Tor rennen! Klicke die Roboter oder das Tor an, um die Lösung zu sehen.</text>
+    <text x="20" y="55" font-size="12" fill="#adbac7" id="info-text">Two agents are attempting to stream telemetry through the same network port simultaneously. Click on the robots or the central port gate to see the leased solution.</text>
   </g>
 
   <script type="text/javascript">
@@ -210,15 +210,15 @@
       if (gate.classList.contains('state-collision')) {
         gate.classList.remove('state-collision');
         gate.classList.add('state-lease');
-        title.textContent = '🔑 Die Lösung: Port-Leasing (Miet-Schlüssel)';
+        title.textContent = '🔑 The Solution: Port Lease Reservation';
         title.setAttribute('fill', '#56d364');
-        text.textContent = 'Mit dem Python-SDK mietet sich Agent Blue den Port exklusiv (wie eine Reservierung). Agent Green wartet brav, bis er an der Reihe ist.';
+        text.textContent = 'The SDK reserves the port for Agent Blue. Agent Green pauses its network binding loop until the lease is safely released.';
       } else {
         gate.classList.remove('state-lease');
         gate.classList.add('state-collision');
-        title.textContent = '💥 Das Problem: Port-Collision (Zusammenstoß)';
+        title.textContent = '💥 The Problem: Port Collisions';
         title.setAttribute('fill', '#ff7b72');
-        text.textContent = 'Ohne Regeln rennen beide Roboter gleichzeitig durch das Tor (denselben Port). Es knallt, und die Verbindung bricht ab!';
+        text.textContent = 'Without rules, both agents bind to the same port. The kernel rejects the secondary socket, causing telemetry data streams to crash.';
       }
     }
 
@@ -227,17 +227,17 @@
       var text = document.getElementById('info-text');
 
       if (agent === 'blue') {
-        title.textContent = '🧠 Agent Blue (Vektor-Schlau-Kopf)';
+        title.textContent = '🧠 Agent Blue (Vector Search head)';
         title.setAttribute('fill', '#58a6ff');
-        text.textContent = 'Er überlegt sich schlaue Vektoren (Ideen) und sucht im System nach Ähnlichkeiten. Er fragt das Port-Lease an, bevor er sendet.';
+        text.textContent = 'Analyzes structured workspace files and queries the local vector backend to discover code patterns.';
       } else if (agent === 'green') {
-        title.textContent = '🛠️ Agent Green (WebAssembly-Bauer)';
+        title.textContent = '🛠️ Agent Green (WebAssembly Runner)';
         title.setAttribute('fill', '#56d364');
-        text.textContent = 'Er führt Programme direkt im schnellen WebAssembly-Modus (Wasmtime/Wazero) aus, ohne den Computer mit Unterprozessen zu belasten.';
+        text.textContent = 'Executes sandboxed modules in-process using wazero/wasmtime compilers to avoid external system call latency.';
       } else if (agent === 'purple') {
-        title.textContent = '📡 Swarm Coordinator (Der Funker)';
+        title.textContent = '📡 Swarm Coordinator (NATS Broker)';
         title.setAttribute('fill', '#bc8cff');
-        text.textContent = 'Er koordiniert alle Roboter über das NATS-Funksystem (Event Bus) und meldet sofort, wenn ein neuer Evolve-Befehl auszuführen ist.';
+        text.textContent = 'Synchronizes state transitions, code mutation events, and execution signals over local TCP sockets.';
       }
     }
     ]]>

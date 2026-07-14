@@ -26,9 +26,13 @@ Covers:
 """
 
 from collections.abc import Mapping
+import os
+import pathlib
+import sys
 from typing import Any
 import unittest
 
+from absl.testing import absltest
 import pydantic
 
 from google.antigravity import types
@@ -42,14 +46,21 @@ class RunCommandArgs(pydantic.BaseModel):
   command_line: str
 
 
-def _make_tool_call(name: str = "run_command", **args: Any) -> types.ToolCall:
+def _make_tool_call(
+    name: str = "run_command", server_name: str | None = None, **args: Any
+) -> types.ToolCall:
   # Simulate Connection layer path normalization for tests
   canonical_path = None
   for path_key in ("path", "file_path", "TargetFile", "directory_path"):
     if path_key in args and isinstance(args[path_key], str):
       canonical_path = args[path_key]
       break
-  return types.ToolCall(name=name, args=args, canonical_path=canonical_path)
+  return types.ToolCall(
+      name=name,
+      args=args,
+      canonical_path=canonical_path,
+      server_name=server_name,
+  )
 
 
 class BuilderTest(unittest.TestCase):
@@ -818,5 +829,237 @@ class WorkspaceOnlyTest(unittest.IsolatedAsyncioTestCase):
     self.assertTrue(result.allow)
 
 
+import tempfile
+
+
+class PolicyPathScopingDirectTest(absltest.TestCase):
+  """Direct unit tests for path normalization and workspace scoping."""
+
+  def setUp(self):
+    super().setUp()
+    self._temp_dir = tempfile.TemporaryDirectory()
+    self.temp_dir_path = pathlib.Path(self._temp_dir.name).resolve()
+
+  def tearDown(self):
+    self._temp_dir.cleanup()
+    super().tearDown()
+
+  def test_secure_normalize_path_resolves_existing_symlinks(self):
+    """_secure_normalize_path must follow and resolve existing symlinks."""
+    # Create real folder and symlink pointing to it
+    real_dir = self.temp_dir_path / "real_dir"
+    real_dir.mkdir(exist_ok=True)
+    symlink_dir = self.temp_dir_path / "symlink_dir"
+
+    try:
+      os.symlink(real_dir, symlink_dir)
+    except OSError:
+      self.skipTest("Symbolic links are not supported in this environment.")
+
+    resolved_path = policy._secure_normalize_path(str(symlink_dir / "file.txt"))
+
+    # Assert that the symlinked parent was resolved to the canonical real_dir
+    self.assertEqual(resolved_path, real_dir / "file.txt")
+
+  def test_is_case_insensitive_prober(self):
+    """_is_case_insensitive must dynamically check OS filesystem case sensitivity."""
+    # Probe our active hermetic temp directory
+    is_ci = policy._is_case_insensitive(self.temp_dir_path)
+
+    # Validate platform expectations
+    expected_ci = sys.platform in ("win32", "darwin")
+    self.assertEqual(is_ci, expected_ci)
+
+  def test_is_path_in_workspace_structural_containment(self):
+    """is_path_in_workspace must securely check path containment component-wise."""
+    ws = self.temp_dir_path / "my_workspace"
+    ws.mkdir(exist_ok=True)
+
+    self.assertTrue(
+        policy._is_path_in_workspace(str(ws / "sub/file.txt"), str(ws))
+    )
+
+    self.assertTrue(policy._is_path_in_workspace(str(ws), str(ws)))
+
+    evil_ws = self.temp_dir_path / "my_workspace-evil"
+    self.assertFalse(
+        policy._is_path_in_workspace(str(evil_ws / "file.txt"), str(ws))
+    )
+
+    self.assertFalse(
+        policy._is_path_in_workspace(
+            str(self.temp_dir_path / "outside.txt"), str(ws)
+        )
+    )
+
+  def test_is_path_in_workspace_case_folding(self):
+    """is_path_in_workspace must fold casing symmetrically on case-insensitive drives."""
+    ws = self.temp_dir_path / "WorkspaceDir"
+    ws.mkdir(exist_ok=True)
+
+    # Query filesystem casing to verify case folding behavior
+    if policy._is_case_insensitive(ws):
+      # On case-insensitive APFS/Windows, lowercased paths must match
+      lower_target = str(ws).lower() + "/sub/file.txt"
+      self.assertTrue(policy._is_path_in_workspace(lower_target, str(ws)))
+    else:
+      # On case-sensitive EXT4 Linux, mismatched casing must be blocked
+      upper_target = str(ws).upper() + "/sub/file.txt"
+      self.assertFalse(policy._is_path_in_workspace(upper_target, str(ws)))
+
+
+class McpPolicyTest(unittest.IsolatedAsyncioTestCase):
+  """Unit tests for overloaded MCP policy methods and structured target alignment."""
+
+  def setUp(self):
+    super().setUp()
+    self.mcp_config = types.McpStdioServer(name="math", command="npx")
+    self.mcp_config_adv = types.McpStdioServer(
+        name="math_advanced", command="npx"
+    )
+
+  def test_allow_mcp_builder_wildcard(self):
+    """allow(mcp_config) must produce a single wildcard policy in structured target format."""
+    policies = policy.allow(self.mcp_config)
+    self.assertIsInstance(policies, list)
+    (p,) = policies  # Implicitly asserts length is exactly 1
+    self.assertEqual(p.tool, "math/*")
+    self.assertEqual(p.decision, policy.Decision.APPROVE)
+
+  def test_allow_mcp_builder_specific_tools(self):
+    """allow(mcp_config, tools) must produce policies in 'server/tool' format."""
+    policies = policy.allow(self.mcp_config, ["calc", "multiply"])
+    self.assertIsInstance(policies, list)
+    p1, p2 = policies  # Implicitly asserts length is exactly 2
+    self.assertEqual(p1.tool, "math/calc")
+    self.assertEqual(p2.tool, "math/multiply")
+    self.assertEqual(p1.name, "approve_math_calc")
+
+  def test_deny_mcp_builder_specific_tools(self):
+    """deny(mcp_config, tools) must produce policies in 'server/tool' format."""
+    policies = policy.deny(self.mcp_config, ["calc"])
+    self.assertIsInstance(policies, list)
+    (p,) = policies  # Implicitly asserts length is exactly 1
+    self.assertEqual(p.tool, "math/calc")
+    self.assertEqual(p.decision, policy.Decision.DENY)
+
+  def test_ask_user_mcp_builder_specific_tools(self):
+    """ask_user(mcp_config, tools) must produce policies in 'server/tool' format with handler."""
+
+    def dummy_handler(tc):
+      return True
+
+    policies = policy.ask_user(self.mcp_config, ["calc"], handler=dummy_handler)
+    self.assertIsInstance(policies, list)
+    (p,) = policies  # Implicitly asserts length is exactly 1
+    self.assertEqual(p.tool, "math/calc")
+    self.assertEqual(p.decision, policy.Decision.ASK_USER)
+    self.assertIs(p.ask_user, dummy_handler)
+
+  def test_builder_custom_name_unique(self):
+    """Builders must append tool suffix to custom name for unique logging."""
+    policies = policy.allow(self.mcp_config, ["calc"], name="custom")
+    (p,) = policies  # Implicitly asserts length is exactly 1
+    self.assertEqual(p.name, "custom_calc")
+
+  def test_builder_rejects_string_with_mcp_tools(self):
+    """Builders must raise ValueError if mcp_tools is provided for a string tool name."""
+    with self.assertRaises(ValueError) as ctx:
+      policy.allow("read_file", ["tool1"])
+    self.assertIn("mcp_tools cannot be specified", str(ctx.exception))
+
+  def test_mcp_tools_string_type_guard(self):
+    """Builders must raise ValueError if mcp_tools is passed as a raw string."""
+    with self.assertRaises(ValueError) as ctx:
+      policy.allow(self.mcp_config, "calc")
+    self.assertIn("mcp_tools must be a sequence of strings", str(ctx.exception))
+
+  def test_enforce_flattens_nested_policies(self):
+    """enforce() must successfully flatten mixed nested lists of policies."""
+    policies = [
+        policy.allow("read_file"),
+        policy.allow(self.mcp_config),  # Returns list[Policy]
+    ]
+    hook = policy.enforce(policies, mcp_servers=[self.mcp_config])
+    self.assertIsInstance(hook, hooks.PreToolCallDecideHook)
+
+  async def test_secure_longest_match_matching(self):
+    """math prefix must not eagerly match math_advanced tools."""
+    # Register both servers (math_advanced has longer name)
+    policies = [
+        policy.allow(self.mcp_config),  # math/*
+        policy.deny(self.mcp_config_adv),  # math_advanced/*
+    ]
+    hook = policy.enforce(
+        policies, mcp_servers=[self.mcp_config, self.mcp_config_adv]
+    )
+    ctx = hooks.HookContext()
+
+    result = await hook.run(
+        ctx, _make_tool_call("calc", server_name="math_advanced")
+    )
+    self.assertFalse(result.allow)
+    self.assertIn("math_advanced_all", result.message)
+
+    result = await hook.run(ctx, _make_tool_call("calc", server_name="math"))
+    self.assertTrue(result.allow)
+
+  async def test_9_level_priority_specific_allow_beats_prefix_deny(self):
+    """Specific Allow (level 2) must beat Prefix Deny (level 3)."""
+    policies = [
+        policy.allow(
+            self.mcp_config, ["calc"]
+        ),  # math/calc -> Specific Allow (level 2)
+        policy.deny(self.mcp_config),  # math/* -> Prefix Deny (level 3)
+    ]
+    hook = policy.enforce(policies, mcp_servers=[self.mcp_config])
+    ctx = hooks.HookContext()
+
+    result = await hook.run(ctx, _make_tool_call("calc", server_name="math"))
+    self.assertTrue(result.allow)
+
+    result = await hook.run(
+        ctx, _make_tool_call("multiply", server_name="math")
+    )
+    self.assertFalse(result.allow)
+
+  def test_enforce_rejects_non_policy_in_sequence(self):
+    """enforce() must raise ValueError if a non-Policy is found in a nested sequence."""
+    bad_policies = [
+        policy.allow("read_file"),
+        ["not_a_policy"],  # Invalid element in nested list
+    ]
+    with self.assertRaises(ValueError) as ctx:
+      policy.enforce(bad_policies, mcp_servers=[self.mcp_config])
+    self.assertIn("Expected Policy, got <class 'str'>", str(ctx.exception))
+
+  def test_enforce_rejects_invalid_policy_type(self):
+    """enforce() must raise ValueError if a direct invalid type is passed."""
+    bad_policies = [
+        policy.allow("read_file"),
+        123,  # Invalid direct type
+    ]
+    with self.assertRaises(ValueError) as ctx:
+      policy.enforce(bad_policies, mcp_servers=[self.mcp_config])
+    self.assertIn(
+        "Expected Policy or Sequence of Policies, got <class 'int'>",
+        str(ctx.exception),
+    )
+
+  async def test_matches_target_unknown_server_prefix(self):
+    """Prefixed calls with unknown server name must be treated as standard tools."""
+    policies = [
+        policy.allow("math/*"),  # math/*
+    ]
+    # 'unknown' is NOT in mcp_servers
+    hook = policy.enforce(policies, mcp_servers=[self.mcp_config])
+    ctx = hooks.HookContext()
+
+    # Since 'unknown' is unregistered, 'calc' with server_name='unknown' is treated as a standard tool.
+    # It should NOT match the 'math/*' prefix wildcard.
+    result = await hook.run(ctx, _make_tool_call("calc", server_name="unknown"))
+    self.assertTrue(result.allow)  # Default open since no policy matches
+
+
 if __name__ == "__main__":
-  unittest.main()
+  absltest.main()

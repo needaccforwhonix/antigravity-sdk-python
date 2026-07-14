@@ -136,16 +136,6 @@ class Agent:
         self._hook_runner.register_hook(policy.enforce(active_policies))
 
       all_tools = list(self._config.tools)
-      # Connect MCP servers
-      if self._config.mcp_servers:
-        logging.info("Connecting to MCP servers...")
-        self._mcp_bridge = bridge.McpBridge()
-        self._exit_stack.push_async_callback(self._mcp_bridge.stop)
-
-        for server_cfg in self._config.mcp_servers:
-          await self._mcp_bridge.connect(server_cfg)
-        all_tools.extend(self._mcp_bridge.tools)
-
       self._tool_runner = tool_runner.ToolRunner(tools=all_tools)
 
       self._strategy = self._config.create_strategy(

@@ -272,6 +272,7 @@ The SDK follows a three-layer architecture:
 
 ![SDK Dependencies](docs/sdk_dependencies.svg)
 ![Swarm RAG Telemetry](docs/swarm_rag_telemetry.svg)
+![Robot Mesh ELI5](docs/robot_mesh_eli5.svg)
 
 ## Component Documentation
 

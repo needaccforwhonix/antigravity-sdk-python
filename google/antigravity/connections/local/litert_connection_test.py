@@ -642,8 +642,16 @@ class LiteRTConnectionTest(unittest.IsolatedAsyncioTestCase):
       tool = litert_connection.litert_server.OpenAITool({"name": "foo"})
       self.assertEqual(tool.get_tool_description(), {"name": "foo"})
 
-  async def test_litert_engine_max_num_tokens_param(self):
+  @mock.patch("subprocess.Popen")
+  @mock.patch(
+      "google.antigravity.connections.local.local_connection.LocalConnectionStrategy.__aenter__"
+  )
+  async def test_litert_engine_max_num_tokens_param(
+      self, mock_super_enter, mock_popen
+  ):
     """Verify max_num_tokens (not max_context_tokens) is passed to litert_lm.Engine."""
+    mock_super_enter.return_value = None
+    mock_popen.return_value = mock.MagicMock()
     config = litert_connection_config.LiteRTAgentConfig(
         model_path="/dummy/path.litertlm",
         max_context_tokens=4096,

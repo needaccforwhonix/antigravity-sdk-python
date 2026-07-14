@@ -14,6 +14,7 @@
 
 """Tests for event_processor that translates wire events to SDK events."""
 
+import os
 import unittest
 from unittest import mock
 

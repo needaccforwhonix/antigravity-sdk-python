@@ -1671,7 +1671,7 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
         workspaces=["file:///dev/shm/workspace", "/tmp/clean-path"]
     )
     self.assertEqual(
-        strategy._workspaces, ["/dev/shm/workspace", "/tmp/clean-path"]
+        strategy._workspaces, [os.path.normpath("/dev/shm/workspace"), "/tmp/clean-path"]
     )
 
   def test_mcp_servers_propagated(self):
@@ -3356,12 +3356,12 @@ class LocalAgentConfigTest(absltest.TestCase):
         hooks=[],
         triggers=[],
         mcp_servers=[],
-        workspaces=["/tmp/ws"],
+        workspaces=[os.path.abspath("/tmp/ws")],
         conversation_id="123",
-        save_dir="/tmp/save",
-        app_data_dir="/tmp/app",
+        save_dir=os.path.abspath("/tmp/save"),
+        app_data_dir=os.path.abspath("/tmp/app"),
         response_schema="{}",
-        skills_paths=["/tmp/skills"],
+        skills_paths=[os.path.abspath("/tmp/skills")],
         model="gemini-2.5-pro",
         api_key="fake_api_key",
         vertex=True,
@@ -3439,7 +3439,7 @@ class LocalAgentConfigTest(absltest.TestCase):
   def test_create_strategy_app_data_dir(self):
     config = local_connection_config.LocalAgentConfig(
         system_instructions="test instructions",
-        app_data_dir="/foo/bar",
+        app_data_dir=os.path.abspath("/foo/bar"),
     )
 
     mock_tool_runner = mock.create_autospec(
@@ -3455,7 +3455,7 @@ class LocalAgentConfigTest(absltest.TestCase):
     )
 
     self.assertIsInstance(strategy, local_connection.LocalConnectionStrategy)
-    self.assertEqual(strategy._app_data_dir, "/foo/bar")
+    self.assertEqual(strategy._app_data_dir, os.path.abspath("/foo/bar"))
 
   def test_app_data_dir_relative_path_raises(self):
     with self.assertRaises(pydantic.ValidationError):
@@ -3515,6 +3515,15 @@ class LocalAgentConfigWorkspaceTest(
 ):
   """Tests for workspace scoping policy with app_data_dir inclusion."""
 
+  def setUp(self):
+    super().setUp()
+    self._temp_dir = tempfile.TemporaryDirectory()
+    self.temp_dir_path = pathlib.Path(self._temp_dir.name).resolve()
+
+  def tearDown(self):
+    self._temp_dir.cleanup()
+    super().tearDown()
+
   @parameterized.named_parameters(
       dict(
           testcase_name="allowed_in_workspace",
@@ -3566,7 +3575,7 @@ class LocalAgentConfigWorkspaceTest(
       msg: str,
   ):
     # Create dynamic, hermetic temporary directory
-    temp_dir_path = pathlib.Path(self.create_tempdir().full_path)
+    temp_dir_path = self.temp_dir_path
 
     workspace_dir = temp_dir_path / "my_workspace"
     default_app_data_dir = temp_dir_path / "my_default_app_data"
@@ -3601,7 +3610,7 @@ class LocalAgentConfigWorkspaceTest(
 
   async def test_workspace_policy_denies_symlink_traversal(self):
     """Tests that the workspace scoping policy correctly blocks symlinks pointing outside."""
-    temp_dir_path = pathlib.Path(self.create_tempdir().full_path)
+    temp_dir_path = self.temp_dir_path
 
     # Define safe workspace and unsafe outer target
     workspace_dir = temp_dir_path / "my_workspace"
@@ -3614,7 +3623,10 @@ class LocalAgentConfigWorkspaceTest(
 
     # Create a symbolic link inside the workspace pointing to the outer file
     symlink_path = workspace_dir / "escape_link.txt"
-    os.symlink(outer_file, symlink_path)
+    try:
+      os.symlink(outer_file, symlink_path)
+    except OSError:
+      self.skipTest("Symbolic links are not supported in this environment.")
 
     config = local_connection_config.LocalAgentConfig(
         system_instructions="test",

@@ -59,6 +59,7 @@ __all__ = [
     "McpSseServer",
     "McpStreamableHttpServer",
     "McpServerConfig",
+    "BaseMcpServerConfig",
     "ToolCall",
     "ToolResult",
     "PythonTool",
@@ -389,35 +390,71 @@ class CapabilitiesConfig(pydantic.BaseModel):
     return self
 
 
-class McpStdioServer(pydantic.BaseModel):
+class BaseMcpServerConfig(pydantic.BaseModel):
+  """Base configuration for all Model Context Protocol (MCP) servers.
+
+  Attributes:
+    name: Unique identifier for the MCP server. Must match the regex pattern
+      ^[a-zA-Z0-9_-]+$, which aligns with the naming constraints of the Gemini
+      API tool naming specification (only alphanumeric characters, hyphens, and
+      underscores are permitted).
+    timeout_seconds: Optional timeout in seconds for connecting to the server
+      and listing tools.
+  """
+
+  name: Annotated[str, pydantic.Field(pattern=r"^[a-zA-Z0-9_-]+$")]
+  timeout_seconds: int | None = None
+
+  @pydantic.model_validator(mode="after")
+  def _check_mutually_exclusive(self) -> "BaseMcpServerConfig":
+    enabled_tools = getattr(self, "enabled_tools", None)
+    disabled_tools = getattr(self, "disabled_tools", None)
+    if enabled_tools is not None and disabled_tools is not None:
+      raise ValueError(
+          "enabled_tools and disabled_tools should be mutually exclusive."
+      )
+    return self
+
+
+class McpStdioServer(BaseMcpServerConfig):
   """Configuration for an MCP server connected via stdio.
 
   Attributes:
     command: The command to run to start the server.
     type: The type of connection, always "stdio".
     args: Arguments to pass to the command.
+    env: Environment variables to merge into the spawned subprocess's environment.
+    enabled_tools: Explicit allowlist of tools to enable.
+    disabled_tools: Explicit denylist of tools to disable.
   """
 
   command: str
   type: Literal["stdio"] = "stdio"
   args: list[str] = pydantic.Field(default_factory=list)
+  env: dict[str, str] | None = None
+  enabled_tools: list[str] | None = None
+  disabled_tools: list[str] | None = None
 
 
-class McpSseServer(pydantic.BaseModel):
+class McpSseServer(BaseMcpServerConfig):
   """Configuration for an MCP server connected via SSE.
 
   Attributes:
     url: The URL of the SSE endpoint.
     type: The type of connection, always "sse".
     headers: Optional headers to send with the connection request.
+    enabled_tools: Explicit allowlist of tools to enable.
+    disabled_tools: Explicit denylist of tools to disable.
   """
 
   url: str
   type: Literal["sse"] = "sse"
   headers: dict[str, str] | None = None
+  enabled_tools: list[str] | None = None
+  disabled_tools: list[str] | None = None
 
 
-class McpStreamableHttpServer(pydantic.BaseModel):
+class McpStreamableHttpServer(BaseMcpServerConfig):
   """Configuration for an MCP server connected via Streamable HTTP.
 
   Attributes:
@@ -427,6 +464,8 @@ class McpStreamableHttpServer(pydantic.BaseModel):
     timeout: Connection timeout in seconds.
     sse_read_timeout: SSE read timeout in seconds.
     terminate_on_close: Whether to terminate the connection on close.
+    enabled_tools: Explicit allowlist of tools to enable.
+    disabled_tools: Explicit denylist of tools to disable.
   """
 
   url: str
@@ -435,6 +474,8 @@ class McpStreamableHttpServer(pydantic.BaseModel):
   timeout: float = 30.0
   sse_read_timeout: float = 300.0
   terminate_on_close: bool = True
+  enabled_tools: list[str] | None = None
+  disabled_tools: list[str] | None = None
 
 
 McpServerConfig = McpStdioServer | McpSseServer | McpStreamableHttpServer
@@ -455,12 +496,14 @@ class ToolCall(pydantic.BaseModel):
     args: Keyword arguments for the tool, as a JSON-serializable dict.
     canonical_path: Optional normalized filesystem path for file-related tools.
       Populated by the Connection layer to enable platform-agnostic L2 policies.
+    server_name: Optional server name if this tool belongs to an MCP server.
   """
 
   name: BuiltinTools | str
   args: dict[str, Any] = pydantic.Field(default_factory=dict)
   id: str | None = None
   canonical_path: str | None = None
+  server_name: str | None = None
 
 
 class ToolResult(pydantic.BaseModel):
@@ -473,6 +516,7 @@ class ToolResult(pydantic.BaseModel):
     result: The tool's return value. Can be any JSON-serializable value.
     error: An error message if execution failed, or None on success.
     exception: The original exception if execution failed. Not serialized.
+    server_name: Optional server name if this tool belongs to an MCP server.
   """
 
   model_config = pydantic.ConfigDict(
@@ -484,6 +528,7 @@ class ToolResult(pydantic.BaseModel):
   result: Any = None
   error: str | None = None
   exception: Exception | None = pydantic.Field(default=None, exclude=True)
+  server_name: str | None = None
 
 
 PythonTool = Callable[..., Any]
@@ -531,6 +576,7 @@ class StepType(str, enum.Enum):
   SYSTEM_MESSAGE = "SYSTEM_MESSAGE"
   COMPACTION = "COMPACTION"
   FINISH = "FINISH"
+  THINKING = "THINKING"
   UNKNOWN = "UNKNOWN"
 
 
@@ -1181,6 +1227,6 @@ class SubagentConfig(pydantic.BaseModel):
   """Configuration for a static subagent."""
   name: str
   description: str = ""
-  system_instructions: str | SystemInstructions | None = None
+  system_instructions: str | SystemInstructions | list[SystemInstructionSection] | None = None
   capabilities: SubagentCapabilities | None = None
   tools: Sequence[Callable[..., Any] | str] = pydantic.Field(default_factory=list)

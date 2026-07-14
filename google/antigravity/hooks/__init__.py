@@ -15,7 +15,9 @@
 """Hooks package for the Google Antigravity SDK."""
 
 from google.antigravity.hooks import policy
+from google.antigravity.hooks.hooks import DecideHook
 from google.antigravity.hooks.hooks import HookContext
+from google.antigravity.hooks.hooks import InspectHook
 from google.antigravity.hooks.hooks import on_compaction
 from google.antigravity.hooks.hooks import on_interaction
 from google.antigravity.hooks.hooks import on_session_end
@@ -34,11 +36,15 @@ from google.antigravity.hooks.hooks import pre_tool_call_decide
 from google.antigravity.hooks.hooks import pre_turn
 from google.antigravity.hooks.hooks import PreToolCallDecideHook
 from google.antigravity.hooks.hooks import PreTurnHook
+from google.antigravity.hooks.hooks import TransformHook
 
 
 __all__ = [
     "policy",
     "HookContext",
+    "DecideHook",
+    "InspectHook",
+    "TransformHook",
     "OnCompactionHook",
     "OnInteractionHook",
     "OnSessionEndHook",
