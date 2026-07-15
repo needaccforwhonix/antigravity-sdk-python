@@ -15,6 +15,7 @@
 """Unit tests for LiteRTConnectionStrategy and LocalOpenAIConnectionStrategy."""
 
 import json
+import logging
 import sys
 from typing import Any
 import unittest
@@ -729,6 +730,40 @@ class LiteRTConnectionTest(unittest.IsolatedAsyncioTestCase):
     )
     self.assertEqual(strategy._mcp_servers, [mcp_server])
     self.assertEqual(strategy._subagents, [subagent])
+
+  def test_litert_logging_defaults_to_silent(self):
+    """Verify LiteRT logging defaults to SILENT (non-verbose)."""
+    with mock.patch.object(litert_connection, "litert_lm") as mock_litert_lm:
+      mock_litert_lm.LogSeverity.SILENT = 1000
+      mock_litert_lm.set_min_log_severity = mock.MagicMock()
+      config = litert_connection_config.LiteRTAgentConfig(
+          model_path="/tmp/model.litertlm",
+      )
+      config.create_strategy(
+          tool_runner=mock.MagicMock(),
+          hook_runner=mock.MagicMock(),
+      )
+      mock_litert_lm.set_min_log_severity.assert_called_with(1000)
+
+  def test_litert_logging_verbose_when_debug_enabled(self):
+    """Verify LiteRT log severity is VERBOSE when Python debug logging is enabled."""
+    with mock.patch.object(litert_connection, "litert_lm") as mock_litert_lm:
+      mock_litert_lm.LogSeverity.VERBOSE = 0
+      mock_litert_lm.set_min_log_severity = mock.MagicMock()
+      logger = logging.getLogger("google.antigravity")
+      old_level = logger.level
+      try:
+        logger.setLevel(logging.DEBUG)
+        config = litert_connection_config.LiteRTAgentConfig(
+            model_path="/tmp/model.litertlm",
+        )
+        config.create_strategy(
+            tool_runner=mock.MagicMock(),
+            hook_runner=mock.MagicMock(),
+        )
+        mock_litert_lm.set_min_log_severity.assert_called_with(0)
+      finally:
+        logger.setLevel(old_level)
 
 
 if __name__ == "__main__":

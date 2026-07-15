@@ -110,11 +110,45 @@ class LiteRTConnectionStrategy(LocalOpenAIConnectionStrategy):
     self._openai_server = None
     self._openai_server_thread = None
 
+    self._configure_litert_logging()
+
     super().__init__(
         base_url="",
         model_name=os.path.basename(model_path),
         **kwargs,
     )
+
+  def _configure_litert_logging(self) -> None:
+    """Configures litert_lm C++ log severity level according to standard Python logging."""
+    if not _LITERT_AVAILABLE or litert_lm is None:
+      return
+    if not hasattr(litert_lm, "set_min_log_severity"):
+      return
+
+    try:
+      # If Python logging is set to DEBUG level or lower (e.g.
+      # logging.basicConfig(level=logging.DEBUG)), enable verbose LiteRT C++
+      # logs. Otherwise silence them by default.
+      is_debug = logging.getLogger().isEnabledFor(
+          logging.DEBUG
+      ) or logging.getLogger("google.antigravity").isEnabledFor(logging.DEBUG)
+
+      if is_debug:
+        verbose_level = (
+            getattr(litert_lm.LogSeverity, "VERBOSE", 0)
+            if hasattr(litert_lm, "LogSeverity")
+            else 0
+        )
+        litert_lm.set_min_log_severity(int(verbose_level))
+      else:
+        silent_level = (
+            getattr(litert_lm.LogSeverity, "SILENT", 1000)
+            if hasattr(litert_lm, "LogSeverity")
+            else 1000
+        )
+        litert_lm.set_min_log_severity(int(silent_level))
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.debug("Failed to configure LiteRT min log severity: %s", e)
 
   @property
   def _openai_server_url(self) -> str:
@@ -159,6 +193,8 @@ class LiteRTConnectionStrategy(LocalOpenAIConnectionStrategy):
           "The 'litert-lm-api' PyPI package is required. "
           "Install it using: pip install litert-lm-api"
       )
+
+    self._configure_litert_logging()
 
     def map_backend(
         b_enum: litert_connection_config.LiteRTBackend | None,
