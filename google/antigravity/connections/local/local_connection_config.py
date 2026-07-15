@@ -184,6 +184,7 @@ class LocalAgentConfig(BaseLocalAgentConfig):
       workspaces: list[str] | None = None,
       env: dict[str, str] | None = None,
       conversation_id: str | None = None,
+      session_continuation_mode: types.SessionContinuationMode | None = None,
       save_dir: str | None = None,
       app_data_dir: str | None = None,
       response_schema: (
@@ -312,6 +313,7 @@ class LocalAgentConfig(BaseLocalAgentConfig):
         system_instructions=self._get_system_instructions(),
         capabilities_config=self.capabilities,
         conversation_id=self.conversation_id,
+        session_continuation_mode=self.session_continuation_mode,
         save_dir=self._get_or_create_save_dir(),
         workspaces=self.workspaces,
         app_data_dir=self.app_data_dir,

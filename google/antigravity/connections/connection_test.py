@@ -15,6 +15,7 @@
 """Validates default implementations in the Connection abstract base class."""
 
 import unittest
+from google.antigravity import types
 from google.antigravity.connections import connection
 from google.antigravity.hooks import hooks as hooks_mod
 from google.antigravity.hooks import policy
@@ -150,6 +151,30 @@ class AgentConfigTest(unittest.TestCase):
     self.assertIs(copied.hooks[0], my_hook)
     self.assertIs(copied.triggers[0], my_trigger)
     self.assertIs(copied.policies[0], my_policy)
+
+  def test_session_continuation_validation_success(self):
+    class ConcreteConfig(connection.AgentConfig):
+
+      def create_strategy(self, *, tool_runner, hook_runner):
+        return None
+
+    # Should not raise
+    ConcreteConfig(
+        session_continuation_mode=types.SessionContinuationMode.RESUME,
+        conversation_id="12345678901234567890123456789012",
+    )
+
+  def test_session_continuation_validation_missing_id_raises(self):
+    class ConcreteConfig(connection.AgentConfig):
+
+      def create_strategy(self, *, tool_runner, hook_runner):
+        return None
+
+    with self.assertRaises(ValueError):
+      ConcreteConfig(
+          session_continuation_mode=types.SessionContinuationMode.RESUME,
+          conversation_id=None,
+      )
 
 
 if __name__ == "__main__":

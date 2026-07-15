@@ -54,6 +54,7 @@ __all__ = [
     "SubagentCapabilities",
     "BuiltinTools",
     "CapabilitiesConfig",
+    "SessionContinuationMode",
     "BaseMcpServerConfig",
     "McpStdioServer",
     "McpStreamableHttpServer",
@@ -556,6 +557,20 @@ class StepStatus(str, enum.Enum):
   ERROR = "ERROR"
   CANCELED = "CANCELED"
   UNKNOWN = "UNKNOWN"
+
+
+class SessionContinuationMode(str, enum.Enum):
+  """Mode for establishing a connection to an agent session.
+
+  Attributes:
+    RESUME: Resume an existing session. Fail if it doesn't exist.
+    CREATE_OR_RESUME: Resume if exists, create a new one if missing.
+    CREATE_ONLY: Create a new session. Fail if it already exists.
+  """
+
+  RESUME = "resume"
+  CREATE_OR_RESUME = "create_or_resume"
+  CREATE_ONLY = "create_only"
 
 
 class Step(pydantic.BaseModel):

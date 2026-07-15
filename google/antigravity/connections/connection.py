@@ -24,6 +24,7 @@ backend type and how to tear it down.
 
 import abc
 import json
+import re
 from typing import Any, AsyncIterator, Callable, Mapping, Sequence
 
 import pydantic
@@ -59,11 +60,38 @@ class AgentConfig(abc.ABC, pydantic.BaseModel):
   )
   workspaces: list[str] = pydantic.Field(default_factory=list)
   conversation_id: str | None = None
+  session_continuation_mode: types.SessionContinuationMode | None = None
   save_dir: str | None = None
   app_data_dir: str | None = None
   response_schema: dict[str, Any] | type[pydantic.BaseModel] | str | None = None
   skills_paths: list[str] = pydantic.Field(default_factory=list)
   subagents: list[types.SubagentConfig] = pydantic.Field(default_factory=list)
+
+  @pydantic.field_validator("conversation_id")
+  @classmethod
+  def _validate_conversation_id(cls, v: str | None) -> str | None:
+    if v:
+      if len(v) < 32:
+        raise ValueError(
+            f"conversation_id must be at least 32 characters long, got {len(v)}"
+        )
+      if not re.match(r"^[a-zA-Z0-9-]+$", v):
+        raise ValueError(
+            f"conversation_id must match [a-zA-Z0-9-], got {v!r}"
+        )
+    return v
+
+  @pydantic.model_validator(mode="after")
+  def _validate_session_continuation(self) -> "AgentConfig":
+    if (
+        self.session_continuation_mode == types.SessionContinuationMode.RESUME
+        and not self.conversation_id
+    ):
+      raise ValueError(
+          "conversation_id must be specified when "
+          "session_continuation_mode is RESUME"
+      )
+    return self
 
   @pydantic.field_validator("response_schema")
   def _validate_schema(cls, v):  # pylint: disable=no-self-argument
@@ -275,5 +303,3 @@ class ConnectionStrategy(abc.ABC):
       exc_tb: The traceback, if any.
     """
     ...
-
-
