@@ -1389,47 +1389,9 @@ class LocalConnectionStrategyConfigTest(parameterized.TestCase):
     How: Set conversation_id via session_config and assert it appears
     on the proto.
     """
-    strategy = self._make_strategy(
-        conversation_id="12345678901234567890123456789012"
-    )
+    strategy = self._make_strategy(conversation_id="resume-123")
     config = strategy._build_harness_config()
-    self.assertEqual(config.cascade_id, "12345678901234567890123456789012")
-
-  def test_session_continuation_mode_passed_through(self):
-    """Verifies session_continuation_mode maps to proto."""
-    for sdk_mode, proto_mode in [
-        (
-            types.SessionContinuationMode.RESUME,
-            localharness_pb2.HarnessConfig.RESUME,
-        ),
-        (
-            types.SessionContinuationMode.CREATE_OR_RESUME,
-            localharness_pb2.HarnessConfig.CREATE_OR_RESUME,
-        ),
-        (
-            types.SessionContinuationMode.CREATE_ONLY,
-            localharness_pb2.HarnessConfig.CREATE_ONLY,
-        ),
-    ]:
-      with self.subTest(sdk_mode=sdk_mode):
-        strategy = self._make_strategy(session_continuation_mode=sdk_mode)
-        config = strategy._build_harness_config()
-        self.assertEqual(config.session_continuation_mode, proto_mode)
-
-  def test_session_continuation_mode_default_unspecified(self):
-    """Verifies session_continuation_mode defaults to UNSPECIFIED.
-
-    Why: If session_continuation_mode is not explicitly set, the harness should
-      use its default fallback logic.
-    How: Build with default config and assert session_continuation_mode is
-      UNSPECIFIED.
-    """
-    strategy = self._make_strategy()
-    config = strategy._build_harness_config()
-    self.assertEqual(
-        config.session_continuation_mode,
-        localharness_pb2.HarnessConfig.SESSION_CONTINUATION_MODE_UNSPECIFIED,
-    )
+    self.assertEqual(config.cascade_id, "resume-123")
 
   def test_cascade_id_default_empty(self):
     """Verifies that cascade_id defaults to empty string when no conversation_id set.
@@ -3511,7 +3473,7 @@ class LocalAgentConfigTest(absltest.TestCase):
         triggers=[],
         mcp_servers=[],
         workspaces=["/tmp/ws"],
-        conversation_id="12345678901234567890123456789012",
+        conversation_id="123",
         save_dir="/tmp/save",
         app_data_dir="/tmp/app",
         response_schema="{}",
@@ -3527,7 +3489,7 @@ class LocalAgentConfigTest(absltest.TestCase):
     self.assertTrue(config.vertex)
     self.assertEqual(config.project, "my_project")
     self.assertEqual(config.location, "us-central1")
-    self.assertEqual(config.conversation_id, "12345678901234567890123456789012")
+    self.assertEqual(config.conversation_id, "123")
 
   def test_safe_defaults(self):
     """LocalAgentConfig defaults to confirm_run_command() — deny run_command."""
@@ -3617,35 +3579,6 @@ class LocalAgentConfigTest(absltest.TestCase):
           system_instructions="test",
           app_data_dir="relative/path",
       )
-
-  def test_conversation_id_validation(self):
-    # Valid ID (32 chars, alphanumeric)
-    local_connection_config.LocalAgentConfig(
-        system_instructions="test",
-        conversation_id="12345678901234567890123456789012",
-    )
-
-    # Valid ID (36 chars, UUID format with hyphens)
-    local_connection_config.LocalAgentConfig(
-        system_instructions="test",
-        conversation_id="12345678-1234-1234-1234-123456789012",
-    )
-
-    # Invalid ID (too short)
-    with self.assertRaises(pydantic.ValidationError) as ctx:
-      local_connection_config.LocalAgentConfig(
-          system_instructions="test",
-          conversation_id="too-short",
-      )
-    self.assertIn("must be at least 32 characters long", str(ctx.exception))
-
-    # Invalid ID (invalid characters)
-    with self.assertRaises(pydantic.ValidationError) as ctx:
-      local_connection_config.LocalAgentConfig(
-          system_instructions="test",
-          conversation_id="invalid_char_because_of_underscores_123",
-      )
-    self.assertIn("must match [a-zA-Z0-9-]", str(ctx.exception))
 
   def test_create_strategy_with_mcp_servers(self):
     stdio_cfg = types.McpStdioServer(

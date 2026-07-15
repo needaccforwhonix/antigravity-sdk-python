@@ -641,15 +641,13 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
 
     config = local_connection.LocalAgentConfig(
         system_instructions="test",
-        conversation_id="12345678901234567890123456789012",
+        conversation_id="resume-id",
         save_dir="/state",
         workspaces=["/path/1", "/path/2"],
     )
     async with agent.Agent(config) as _:
       _, kwargs = mock_strategy_class.call_args
-      self.assertEqual(
-          kwargs.get("conversation_id"), "12345678901234567890123456789012"
-      )
+      self.assertEqual(kwargs.get("conversation_id"), "resume-id")
       self.assertEqual(kwargs.get("save_dir"), "/state")
       self.assertEqual(kwargs.get("workspaces"), ["/path/1", "/path/2"])
 

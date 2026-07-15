@@ -28,19 +28,18 @@ import struct
 import subprocess
 import sys
 import threading
-from typing import Any, AsyncIterator, Callable, cast, Sequence
+from typing import Any, AsyncIterator, Callable, Sequence, cast
 
 from google.genai import types as genai_types
 from google.protobuf import json_format
 import websockets
 
-from google.antigravity.connections.local import localharness_pb2
 from google.antigravity import types
 from google.antigravity.connections import connection
+from google.antigravity.connections.local import localharness_pb2
 from google.antigravity.connections.local import event_processor
 from google.antigravity.hooks import hook_runner as h_runner
 from google.antigravity.tools import tool_runner as t_runner
-
 
 LocalConnectionStep = event_processor.LocalConnectionStep
 IDLE_SENTINEL = event_processor.IDLE_SENTINEL
@@ -50,25 +49,6 @@ CLOSE_SENTINEL = event_processor.CLOSE_SENTINEL
 # tests fast.
 _PROCESS_WAIT_TIMEOUT_SECONDS = 3 * 60
 _MAX_WEBSOCKET_CONNECT_RETRIES = 5
-
-
-_SESSION_CONTINUATION_MODE_MAP = {
-    types.SessionContinuationMode.RESUME: localharness_pb2.HarnessConfig.RESUME,
-    types.SessionContinuationMode.CREATE_OR_RESUME: (
-        localharness_pb2.HarnessConfig.CREATE_OR_RESUME
-    ),
-    types.SessionContinuationMode.CREATE_ONLY: (
-        localharness_pb2.HarnessConfig.CREATE_ONLY
-    ),
-}
-
-
-def to_proto_session_continuation_mode(
-    mode: types.SessionContinuationMode | None,
-) -> localharness_pb2.HarnessConfig.SessionContinuationMode:
-  if mode in _SESSION_CONTINUATION_MODE_MAP:
-    return _SESSION_CONTINUATION_MODE_MAP[mode]
-  return localharness_pb2.HarnessConfig.SESSION_CONTINUATION_MODE_UNSPECIFIED
 
 
 def to_proto_model_type(
@@ -642,7 +622,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
       system_instructions: str | types.SystemInstructions | None = None,
       capabilities_config: types.CapabilitiesConfig | None = None,
       conversation_id: str | None = None,
-      session_continuation_mode: types.SessionContinuationMode | None = None,
       save_dir: str | None = None,
       workspaces: list[str] | None = None,
       app_data_dir: str | None = None,
@@ -660,7 +639,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
       system_instructions: Optional SystemInstructions or string shorthand.
       capabilities_config: Optional CapabilitiesConfig to configure tools.
       conversation_id: Optional conversation identifier.
-      session_continuation_mode: Optional mode for establishing a connection.
       save_dir: Optional directory to save trajectories.
       workspaces: Optional list of workspace paths.
       app_data_dir: Optional directory for harness app data.
@@ -689,7 +667,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         capabilities_config or types.CapabilitiesConfig()
     )
     self._conversation_id = conversation_id
-    self._session_continuation_mode = session_continuation_mode
     self._save_dir = save_dir
     self._workspaces = [
         event_processor.normalize_wire_path(ws) for ws in workspaces or []
@@ -910,9 +887,6 @@ class LocalConnectionStrategy(connection.ConnectionStrategy):
         tools=list(main_agent_tool_protos.values()),
         system_instructions=system_instructions_proto,
         cascade_id=self._conversation_id or "",
-        session_continuation_mode=to_proto_session_continuation_mode(
-            self._session_continuation_mode
-        ),
         models=models_protos,
         workspaces=workspace_protos,
         skills_paths=self._skills_paths or [],
