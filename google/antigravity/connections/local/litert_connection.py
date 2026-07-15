@@ -39,6 +39,8 @@ except ImportError:
   litert_lm = None
   _LITERT_AVAILABLE = False
 
+_WARMUP_REQUEST_TIMEOUT_SECONDS = 60
+
 
 class LocalOpenAIConnectionStrategy(local_connection.LocalConnectionStrategy):
   """Lightweight strategy establishing connection to an external local OpenAI API (Ollama)."""
@@ -289,7 +291,9 @@ class LiteRTConnectionStrategy(LocalOpenAIConnectionStrategy):
           logging.debug(
               "LiteRTConnectionStrategy __aenter__: _warmup query start"
           )
-          with _urlopen_no_proxy(req, timeout=10) as r:
+          with _urlopen_no_proxy(
+              req, timeout=_WARMUP_REQUEST_TIMEOUT_SECONDS
+          ) as r:
             r.read()
           logging.debug(
               "LiteRTConnectionStrategy __aenter__: _warmup query complete"
@@ -303,7 +307,7 @@ class LiteRTConnectionStrategy(LocalOpenAIConnectionStrategy):
       # pylint: disable=broad-exception-caught
       except Exception as e:  # pylint: disable=broad-exception-caught  # pylint: disable=broad-exception-caught
         logging.warning(
-            "Warning: LiteRT warm-up request timed out or failed: %s", e
+            "LiteRT warm-up request timed out or failed: %s", e
         )
 
       # Start Go localharness Subprocess via parent
